@@ -1,0 +1,140 @@
+import z from "zod";
+
+export const PlayerSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  is_active: z.number().int(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const CreatePlayerSchema = z.object({
+  name: z.string().min(1, "Nome é obrigatório"),
+});
+
+export const UpdatePlayerSchema = z.object({
+  name: z.string().min(1, "Nome é obrigatório").optional(),
+  is_active: z.number().int().optional(),
+});
+
+export const RoundSchema = z.object({
+  id: z.number(),
+  round_number: z.number(),
+  round_date: z.string(),
+  notes: z.string().nullable(),
+  round_type: z.string(),
+  buy_in_value: z.number().nullable(),
+  rebuy_value: z.number().nullable(),
+  knockout_value: z.number().nullable(),
+  status: z.string(),
+  is_started: z.number().optional(),
+  rebuy_deadline_passed: z.number().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const CreateRoundSchema = z.object({
+  round_number: z.number().int().positive(),
+  round_date: z.string(),
+  notes: z.string().optional(),
+  round_type: z.enum(['regular', 'freezeout', 'knockout']),
+  buy_in_value: z.number().optional(),
+  rebuy_value: z.number().optional(),
+  knockout_value: z.number().optional(),
+  player_ids: z.array(z.number()).min(1),
+});
+
+export const RoundResultSchema = z.object({
+  id: z.number(),
+  round_id: z.number(),
+  player_id: z.number(),
+  position: z.number(),
+  points: z.number(),
+  rebuys: z.number(),
+  knockout_earnings: z.number(),
+  prize: z.number().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const ScoringRuleSchema = z.object({
+  id: z.number(),
+  position: z.number(),
+  points: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const UpdateScoringRuleSchema = z.object({
+  position: z.number().int().positive(),
+  points: z.number().int(),
+});
+
+export const RankingEntrySchema = z.object({
+  player_id: z.number(),
+  player_name: z.string(),
+  total_points: z.number(),
+  rounds_played: z.number(),
+  best_position: z.number().nullable(),
+  average_position: z.number().nullable(),
+  total_prize: z.number().optional(),
+  total_entries: z.number().optional(),
+});
+
+export const TournamentSettingsSchema = z.object({
+  id: z.number(),
+  blind_level_duration: z.number(),
+  blind_levels: z.string(),
+  default_buy_in: z.number().optional(),
+  final_table_percentage: z.number().optional(),
+  final_table_fixed_value: z.number().optional(),
+  total_rounds: z.number().optional(),
+  first_place_percentage: z.number().optional(),
+  second_place_percentage: z.number().optional(),
+  third_place_percentage: z.number().optional(),
+  final_table_top_players: z.number().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const UpdateTournamentSettingsSchema = z.object({
+  blind_level_duration: z.number().int().positive(),
+  blind_levels: z.string().min(1),
+  default_buy_in: z.number().optional(),
+  final_table_percentage: z.number().optional(),
+  final_table_fixed_value: z.number().optional(),
+  total_rounds: z.number().int().positive().optional(),
+  first_place_percentage: z.number().optional(),
+  second_place_percentage: z.number().optional(),
+  third_place_percentage: z.number().optional(),
+  final_table_top_players: z.number().int().positive().optional(),
+});
+
+export type Player = z.infer<typeof PlayerSchema>;
+export type CreatePlayer = z.infer<typeof CreatePlayerSchema>;
+export type UpdatePlayer = z.infer<typeof UpdatePlayerSchema>;
+export type Round = z.infer<typeof RoundSchema>;
+export type CreateRound = z.infer<typeof CreateRoundSchema>;
+export type RoundResult = z.infer<typeof RoundResultSchema>;
+export type ScoringRule = z.infer<typeof ScoringRuleSchema>;
+export type UpdateScoringRule = z.infer<typeof UpdateScoringRuleSchema>;
+export type RankingEntry = z.infer<typeof RankingEntrySchema>;
+
+export type RoundWithResults = Round & {
+  results: (RoundResult & { player_name: string })[];
+};
+
+export const CompleteRoundSchema = z.object({
+  results: z.array(z.object({
+    player_id: z.number(),
+    position: z.number().int().positive(),
+    rebuys: z.number().int().min(0).optional(),
+    knockout_earnings: z.number().min(0).optional(),
+    prize: z.number().min(0).optional(),
+  })),
+});
+
+export type CompleteRound = z.infer<typeof CompleteRoundSchema>;
+
+export type TournamentSettings = z.infer<typeof TournamentSettingsSchema>;
+export type UpdateTournamentSettings = z.infer<typeof UpdateTournamentSettingsSchema>;

@@ -1,0 +1,1 @@
+ALTER TABLE round_results ADD COLUMN prize REAL DEFAULT 0;

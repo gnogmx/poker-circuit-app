@@ -1,0 +1,40 @@
+
+CREATE TABLE players (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE rounds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_number INTEGER NOT NULL,
+  round_date DATE NOT NULL,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_rounds_number ON rounds(round_number);
+
+CREATE TABLE round_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id INTEGER NOT NULL,
+  player_id INTEGER NOT NULL,
+  position INTEGER NOT NULL,
+  points INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_round_results_round ON round_results(round_id);
+CREATE INDEX idx_round_results_player ON round_results(player_id);
+
+CREATE TABLE scoring_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  position INTEGER NOT NULL UNIQUE,
+  points INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

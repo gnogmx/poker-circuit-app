@@ -1,0 +1,3 @@
+
+ALTER TABLE rounds ADD COLUMN is_started BOOLEAN DEFAULT 0;
+ALTER TABLE rounds ADD COLUMN rebuy_deadline_passed BOOLEAN DEFAULT 0;
