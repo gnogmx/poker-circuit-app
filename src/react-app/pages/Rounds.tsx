@@ -1,16 +1,18 @@
 import { useState } from 'react';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
+import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
 import { Player, RoundWithResults } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Plus, Trash2, Loader2, X, Calendar, DollarSign, Radio } from 'lucide-react';
+import { Plus, Trash2, Loader2, X, Calendar, DollarSign, Radio, Trophy, Users, RefreshCw } from 'lucide-react';
 
 type RoundType = 'regular' | 'freezeout' | 'knockout';
 
 export default function Rounds() {
   const { data: rounds, loading: loadingRounds, error, refresh: refreshRounds } = useApi<RoundWithResults[]>('/api/rounds');
+  const { isAdmin } = useChampionship();
   const { data: players, loading: loadingPlayers } = useApi<Player[]>('/api/players');
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -23,6 +25,8 @@ export default function Rounds() {
     knockout_value: '50',
   });
   const [selectedPlayers, setSelectedPlayers] = useState<Set<number>>(new Set());
+  const [managingRound, setManagingRound] = useState<RoundWithResults | null>(null);
+  const [replacingPlayerId, setReplacingPlayerId] = useState<number | null>(null);
 
   const handlePlayerToggle = (playerId: number) => {
     const newSelected = new Set(selectedPlayers);
@@ -105,6 +109,40 @@ export default function Rounds() {
       knockout_value: '50',
     });
     setSelectedPlayers(new Set());
+    setSelectedPlayers(new Set());
+  };
+
+  const handleReplacePlayer = async (roundId: number, playerIdToRemove: number) => {
+    if (!confirm('Tem certeza que deseja substituir este jogador pelo próximo do ranking?')) return;
+
+    try {
+      setReplacingPlayerId(playerIdToRemove);
+      const res = await apiRequest(
+        `/api/rounds/${roundId}/replace-player`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ playerIdToRemove })
+        }
+      ) as { success: boolean; replaced: boolean; newPlayer?: Player; message?: string };
+
+      if (res.replaced && res.newPlayer) {
+        alert(`Jogador substituído com sucesso! Novo jogador: ${res.newPlayer.name}`);
+        refreshRounds();
+        // Update local state to reflect change immediately
+        if (managingRound) {
+          setManagingRound({
+            ...managingRound,
+            players: managingRound.players?.map(p => p.id === playerIdToRemove ? { id: res.newPlayer!.id, name: res.newPlayer!.name } : p)
+          });
+        }
+      } else {
+        alert(res.message || 'Não foi possível substituir o jogador.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Erro ao substituir jogador');
+    } finally {
+      setReplacingPlayerId(null);
+    }
   };
 
   const loading = loadingRounds || loadingPlayers;
@@ -124,15 +162,12 @@ export default function Rounds() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-white">Rodadas</h2>
-            <p className="text-gray-400 mt-1">Configure as rodadas do campeonato</p>
-          </div>
-          {!showForm && !activeRound && (
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-white">Rodadas</h2>
+          {isAdmin && !showForm && !activeRound && (
             <Button onClick={() => setShowForm(true)}>
-              <Plus className="w-4 h-4" />
-              <span>Nova Rodada</span>
+              <Plus className="w-4 h-4 mr-2" />
+              Nova Rodada
             </Button>
           )}
         </div>
@@ -161,6 +196,71 @@ export default function Rounds() {
                 >
                   <Trash2 className="w-5 h-5" />
                 </button>
+              </div>
+            </CardHeader>
+          </Card>
+        )}
+
+        {/* Upcoming Round (Final Table) */}
+        {rounds?.find(r => r.status === 'upcoming') && (
+          <Card className="border-2 border-yellow-500/50 bg-yellow-500/5">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-4">
+                    <Trophy className="w-6 h-6 text-yellow-400 animate-bounce" />
+                    <h3 className="text-xl font-semibold text-white">
+                      {rounds.find(r => r.status === 'upcoming')?.is_final_table ? 'Mesa Final' : `Rodada ${rounds.find(r => r.status === 'upcoming')?.round_number}`} - Pronta para Iniciar
+                    </h3>
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-yellow-500/20 text-yellow-300">
+                      {getRoundTypeLabel(rounds.find(r => r.status === 'upcoming')?.round_type || 'regular')}
+                    </span>
+                  </div>
+                  <p className="text-gray-300 text-sm">
+                    Esta rodada foi gerada e está aguardando início.
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {isAdmin && (
+                    <>
+                      <Button
+                        variant="secondary"
+                        onClick={() => setManagingRound(rounds.find(r => r.status === 'upcoming') || null)}
+                        className="bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 border-blue-500/50"
+                      >
+                        <Users className="w-4 h-4 mr-2" />
+                        Gerenciar Jogadores
+                      </Button>
+                      <Button
+                        onClick={async () => {
+                          const round = rounds.find(r => r.status === 'upcoming');
+                          if (!round) return;
+                          if (!confirm('Deseja iniciar esta rodada agora?')) return;
+
+                          try {
+                            await apiRequest(`/api/rounds/${round.id}/start`, { method: 'POST' });
+                            refreshRounds();
+                            window.location.href = '/live-game';
+                          } catch (err: any) {
+                            alert(err.message || 'Erro ao iniciar rodada');
+                          }
+                        }}
+                        className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700"
+                      >
+                        <Radio className="w-4 h-4 mr-2" />
+                        Iniciar Agora
+                      </Button>
+                    </>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleDelete(rounds.find(r => r.status === 'upcoming')!.id)}
+                      className="text-gray-400 hover:text-red-400 transition-colors p-2"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </CardHeader>
           </Card>
@@ -240,7 +340,7 @@ export default function Rounds() {
                   <Input
                     label="Buy-in ($)"
                     type="number"
-                    step="0.01"
+                    step="1"
                     value={formData.buy_in_value}
                     onChange={(e) => setFormData({ ...formData, buy_in_value: e.target.value })}
                     placeholder="600"
@@ -249,7 +349,7 @@ export default function Rounds() {
                     <Input
                       label="Recompra ($)"
                       type="number"
-                      step="0.01"
+                      step="1"
                       value={formData.rebuy_value}
                       onChange={(e) => setFormData({ ...formData, rebuy_value: e.target.value })}
                       placeholder="600"
@@ -259,7 +359,7 @@ export default function Rounds() {
                     <Input
                       label="Knockout/Bounty ($)"
                       type="number"
-                      step="0.01"
+                      step="1"
                       value={formData.knockout_value}
                       onChange={(e) => setFormData({ ...formData, knockout_value: e.target.value })}
                       placeholder="50"
@@ -406,12 +506,14 @@ export default function Rounds() {
                         )}
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleDelete(round.id)}
-                      className="text-gray-400 hover:text-red-400 transition-colors"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleDelete(round.id)}
+                        className="text-gray-400 hover:text-red-400 transition-colors"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    )}
                   </div>
                   {round.notes && (
                     <p className="text-gray-400 text-sm mt-2">{round.notes}</p>
@@ -460,6 +562,76 @@ export default function Rounds() {
           )}
         </div>
       </div>
+
+      {/* Manage Players Modal */}
+      {managingRound && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <Card className="w-full max-w-lg bg-gray-900 border-gray-800">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-semibold text-white flex items-center gap-2">
+                  <Users className="w-5 h-5 text-blue-400" />
+                  Gerenciar Jogadores - Mesa Final
+                </h3>
+                <button
+                  onClick={() => setManagingRound(null)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <p className="text-sm text-gray-400">
+                  Lista de jogadores classificados. Se algum jogador não puder comparecer,
+                  você pode substituí-lo pelo próximo colocado do ranking.
+                </p>
+
+                <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2">
+                  {managingRound.players?.map((player, index) => (
+                    <div
+                      key={player.id}
+                      className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-white/10"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-6 h-6 rounded-full bg-yellow-500/20 text-yellow-500 flex items-center justify-center text-xs font-bold">
+                          {index + 1}
+                        </div>
+                        <span className="text-white font-medium">{player.name}</span>
+                      </div>
+                      <button
+                        onClick={() => handleReplacePlayer(managingRound.id, player.id)}
+                        disabled={replacingPlayerId === player.id}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors text-xs disabled:opacity-50"
+                        title="Substituir pelo próximo do ranking"
+                      >
+                        {replacingPlayerId === player.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
+                        )}
+                        Substituir
+                      </button>
+                    </div>
+                  ))}
+                  {(!managingRound.players || managingRound.players.length === 0) && (
+                    <div className="text-center py-8 text-gray-500">
+                      Nenhum jogador encontrado nesta rodada.
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end pt-4 border-t border-white/10">
+                  <Button variant="secondary" onClick={() => setManagingRound(null)}>
+                    Fechar
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </Layout>
   );
 }

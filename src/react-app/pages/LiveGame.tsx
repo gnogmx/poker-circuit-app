@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
+import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
 import { TournamentSettings } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
@@ -27,6 +28,7 @@ interface ActiveRound {
   knockout_value: number | null;
   is_started: number;
   rebuy_deadline_passed: number;
+  is_final_table?: number;
   players: Array<{ id: number; name: string }>;
   results: Array<unknown>;
 }
@@ -34,7 +36,40 @@ interface ActiveRound {
 export default function LiveGame() {
   const navigate = useNavigate();
   const { data: activeRound, refresh: refreshRound } = useApi<ActiveRound | null>('/api/rounds/active');
-  const { data: settings } = useApi<TournamentSettings>('/api/tournament-settings');
+  const { isAdmin } = useChampionship();
+  const { data: settings, loading: loadingSettings } = useApi<TournamentSettings>('/api/tournament-settings');
+  const { data: prizePool } = useApi<{ final_table_pot: number }>('/api/championships/prize-pool');
+
+  // Debug logs
+  useEffect(() => {
+    console.log('LiveGame State:', { activeRound, settings, loadingSettings });
+  }, [activeRound, settings, loadingSettings]);
+
+  if (!activeRound && !loadingSettings) {
+    return (
+      <Layout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
+          <Coffee className="w-16 h-16 text-gray-500 mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-2">Nenhuma rodada ativa</h2>
+          <p className="text-gray-400 mb-6">Inicie uma rodada na página de Rodadas para começar o jogo.</p>
+          <Button onClick={() => navigate('/rounds')}>
+            Ir para Rodadas
+          </Button>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Wait for prizePool to load if this is a final table
+  if (!settings || !activeRound || loadingSettings || (activeRound.is_final_table && !prizePool)) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+        </div>
+      </Layout>
+    );
+  }
 
   const [gamePlayers, setGamePlayers] = useState<GamePlayer[]>([]);
   const [isPaused, setIsPaused] = useState(false);
@@ -61,16 +96,84 @@ export default function LiveGame() {
     first: { name: string; amount: number; id: number };
     second: { name: string; amount: number; id: number };
     third: { name: string; amount: number; id: number };
+    fourth?: { name: string; amount: number; id: number };
+    fifth?: { name: string; amount: number; id: number };
+    isFinalTable?: boolean;
   } | null>(null);
 
   const intervalRef = useRef<number | null>(null);
   const warningAudioRef = useRef<HTMLAudioElement | null>(null);
   const levelUpAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  const safeSpeak = (text: string) => {
+    try {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US';
+        utterance.rate = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch (e) {
+      console.error('TTS Error:', e);
+    }
+  };
+
+
+  const playLevelUpJingle = () => {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const gainNode = audioContext.createGain();
+      gainNode.connect(audioContext.destination);
+
+      // Pleasant ascending arpeggio: C4 -> E4 -> G4 -> C5 (Major chord)
+      const baseNotes = [
+        { freq: 261.63, time: 0 },     // C4
+        { freq: 329.63, time: 0.15 },  // E4
+        { freq: 392.00, time: 0.30 },  // G4
+        { freq: 523.25, time: 0.45 }   // C5
+      ];
+
+      // Play the jingle 5 times with spacing
+      const repetitions = 5;
+      const repetitionDuration = 0.75; // Each arpeggio takes ~0.6s, add gap
+
+      for (let rep = 0; rep < repetitions; rep++) {
+        const startTime = rep * repetitionDuration;
+
+        baseNotes.forEach(note => {
+          const oscillator = audioContext.createOscillator();
+          oscillator.type = 'sine'; // Smooth, pleasant tone
+          oscillator.frequency.setValueAtTime(note.freq, audioContext.currentTime + startTime + note.time);
+
+          const noteGain = audioContext.createGain();
+          noteGain.gain.setValueAtTime(0, audioContext.currentTime + startTime + note.time);
+          noteGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + startTime + note.time + 0.05);
+          noteGain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + startTime + note.time + 0.4);
+
+          oscillator.connect(noteGain);
+          noteGain.connect(gainNode);
+
+          oscillator.start(audioContext.currentTime + startTime + note.time);
+          oscillator.stop(audioContext.currentTime + startTime + note.time + 0.4);
+        });
+      }
+
+      // Clean up after all repetitions complete
+      setTimeout(() => {
+        audioContext.close();
+      }, (repetitions * repetitionDuration + 0.5) * 1000);
+    } catch (e) {
+      console.error('Web Audio Error:', e);
+    }
+  };
+
+
+
   useEffect(() => {
     // Create audio elements for alerts
-    warningAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LaiDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9n0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
-    levelUpAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LaiDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9n0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
+    warningAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LajDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9j0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
+    levelUpAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LajDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9j0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
   }, []);
 
   useEffect(() => {
@@ -82,18 +185,24 @@ export default function LiveGame() {
   }, [settings]);
 
   useEffect(() => {
-    if (activeRound && activeRound.players) {
-      const initialPlayers = activeRound.players.map(p => ({
-        id: p.id,
-        name: p.name,
-        position: null,
-        isActive: true,
-        eliminatedAt: null,
-        rebuys: 0,
-        knockout_earnings: 0,
-      }));
-      setGamePlayers(initialPlayers);
-      setNextPosition(initialPlayers.length);
+    if (activeRound && activeRound.players && activeRound.players.length > 0) {
+      // Only initialize if gamePlayers is empty or different
+      const existingIds = gamePlayers.map(p => p.id).sort().join(',');
+      const newIds = activeRound.players.map(p => p.id).sort().join(',');
+
+      if (existingIds !== newIds) {
+        const initialPlayers = activeRound.players.map(p => ({
+          id: p.id,
+          name: p.name,
+          position: null,
+          isActive: true,
+          eliminatedAt: null,
+          rebuys: 0,
+          knockout_earnings: 0,
+        }));
+        setGamePlayers(initialPlayers);
+        setNextPosition(initialPlayers.length);
+      }
     }
   }, [activeRound]);
 
@@ -101,22 +210,26 @@ export default function LiveGame() {
     if (activeRound && activeRound.is_started && !isPaused) {
       intervalRef.current = window.setInterval(() => {
         setTimeRemaining((prev) => {
-          // Play warning sound at 1 minute remaining
-          if (prev === 60 && !hasPlayedWarning && warningAudioRef.current) {
-            warningAudioRef.current.play().catch(() => { });
-            setHasPlayedWarning(true);
+          // Play jingle and speak at 1 minute remaining
+          if (prev === 60 && !hasPlayedWarning) {
+            playLevelUpJingle();
             setIsFlashing(true);
+            setTimeout(() => {
+              safeSpeak("Attention players, the blinds will raise in one minute");
+            }, 4000);
+            setTimeout(() => setIsFlashing(false), 4000);
+            setHasPlayedWarning(true);
           }
 
           if (prev <= 1) {
-            // Play level up sound
-            if (!hasPlayedLevelUp && levelUpAudioRef.current) {
-              levelUpAudioRef.current.play().catch(() => { });
+            // Play level up jingle
+            if (!hasPlayedLevelUp) {
+              playLevelUpJingle();
               setHasPlayedLevelUp(true);
             }
 
             setIsFlashing(true);
-            setTimeout(() => setIsFlashing(false), 3000);
+            setTimeout(() => setIsFlashing(false), 4000);
 
             setCurrentLevel((level) => {
               const nextLevel = level + 1;
@@ -124,9 +237,26 @@ export default function LiveGame() {
                 setHasPlayedWarning(false);
                 setHasPlayedLevelUp(false);
 
+                // Speak new level info after jingle
+                const nextLevelText = blindLevels[nextLevel];
+                setTimeout(() => {
+                  if (isBreakLevel(nextLevelText)) {
+                    safeSpeak("Attention players, we are now on a break");
+                  } else {
+                    // Try to parse "100/200" format
+                    const parts = nextLevelText.split('/');
+                    if (parts.length === 2) {
+                      const small = parts[0].trim();
+                      const big = parts[1].trim();
+                      safeSpeak(`Attention players, the blinds now have changed. Small blind is ${small} and big blind is ${big}`);
+                    } else {
+                      safeSpeak(`Attention players, the blinds now have changed to ${nextLevelText}`);
+                    }
+                  }
+                }, 4000);
+
                 // Check if we've passed the break level to mark rebuy deadline
-                const currentLevelText = blindLevels[nextLevel];
-                if (isBreakLevel(currentLevelText) && activeRound && !activeRound.rebuy_deadline_passed) {
+                if (isBreakLevel(nextLevelText) && activeRound && !activeRound.rebuy_deadline_passed) {
                   apiRequest(`/api/rounds/${activeRound.id}/rebuy-deadline`, {
                     method: 'POST',
                   }).then(() => refreshRound());
@@ -153,7 +283,7 @@ export default function LiveGame() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [activeRound, isPaused, settings, blindLevels.length, hasPlayedWarning, hasPlayedLevelUp]);
+  }, [activeRound, isPaused, settings, blindLevels, hasPlayedWarning, hasPlayedLevelUp]);
 
   // Auto-complete round when all players are inactive (game over)
   useEffect(() => {
@@ -169,11 +299,8 @@ export default function LiveGame() {
     }
   }, [gamePlayers, completing, showPrizeModal, activeRound]);
 
-  useEffect(() => {
-    if (timeRemaining > 60) {
-      setIsFlashing(false);
-    }
-  }, [timeRemaining]);
+  // Removed useEffect that was resetting isFlashing - it was interfering with alerts
+
 
   const handleStartGame = async () => {
     if (!activeRound) return;
@@ -183,6 +310,24 @@ export default function LiveGame() {
       await apiRequest(`/api/rounds/${activeRound.id}/start`, {
         method: 'POST',
       });
+
+      // Start Game Alerts
+      playLevelUpJingle();
+      setIsFlashing(true);
+      setTimeout(() => setIsFlashing(false), 4000);
+
+      const currentLevelText = blindLevels[currentLevel] || '';
+      let blindMsg = "";
+      if (currentLevelText.includes('/')) {
+        const parts = currentLevelText.split('/');
+        blindMsg = `Small blind is ${parts[0]} and big blind is ${parts[1]}`;
+      } else {
+        blindMsg = `Blinds are ${currentLevelText}`;
+      }
+      setTimeout(() => {
+        safeSpeak(`Attention players, the tournament has started. ${blindMsg}`);
+      }, 4000);
+
       refreshRound();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao iniciar jogo';
@@ -203,6 +348,12 @@ export default function LiveGame() {
     if (!playerToEliminate) return;
 
     const currentActivePlayers = gamePlayers.filter(p => p.isActive);
+
+    // In knockout rounds, eliminator is REQUIRED unless this is the winner (last player standing)
+    if (activeRound?.round_type === 'knockout' && currentActivePlayers.length > 2 && !eliminatorId) {
+      alert('Em rodadas Knockout, você deve selecionar quem eliminou este jogador para contabilizar o bounty.');
+      return;
+    }
 
     // If only 2 active players and eliminating one, assign position 2 to eliminated and position 1 to remaining
     if (currentActivePlayers.length === 2) {
@@ -332,63 +483,126 @@ export default function LiveGame() {
       setCompleting(true);
 
       // Calculate prize distribution
-      const buyInValue = activeRound.buy_in_value || settings.default_buy_in || 600;
-      const rebuyValue = activeRound.rebuy_value || settings.default_buy_in || 600;
+      let netPrizePool = 0;
+      let buyInValue = 0;
+      let totalEntries = 0;
 
-      const totalRebuys = gamePlayers.reduce((sum, p) => sum + p.rebuys, 0);
-      const totalPlayers = gamePlayers.length;
-      const totalEntries = totalPlayers + totalRebuys;
+      if (activeRound.is_final_table) {
+        // Final Table Logic
+        netPrizePool = prizePool?.final_table_pot || 0;
 
-      // Calculate prize pool breakdown
-      const finalTablePercentage = settings.final_table_percentage || 33.33;
-      const finalTableFixedValue = settings.final_table_fixed_value || 0;
+        // Distribution for Final Table (1st to 5th)
+        const p1 = settings.final_table_1st_percentage || 40;
+        const p2 = settings.final_table_2nd_percentage || 25;
+        const p3 = settings.final_table_3rd_percentage || 20;
+        const p4 = settings.final_table_4th_percentage || 10;
+        const p5 = settings.final_table_5th_percentage || 5;
 
-      const grossPrizePool = (totalPlayers * buyInValue) + (totalRebuys * rebuyValue);
+        const firstPlace = gamePlayers.find(p => p.position === 1);
+        const secondPlace = gamePlayers.find(p => p.position === 2);
+        const thirdPlace = gamePlayers.find(p => p.position === 3);
+        const fourthPlace = gamePlayers.find(p => p.position === 4);
+        const fifthPlace = gamePlayers.find(p => p.position === 5);
 
-      let finalTableAmount = 0;
-      if (finalTableFixedValue > 0) {
-        finalTableAmount = finalTableFixedValue;
+        if (firstPlace && secondPlace && thirdPlace) {
+          setPrizeDistribution({
+            total: netPrizePool,
+            grossTotal: netPrizePool,
+            finalTableAmount: 0, // Already deducted
+            totalEntries: gamePlayers.length,
+            buyInValue: 0,
+            isFinalTable: true,
+            first: {
+              name: firstPlace.name,
+              amount: netPrizePool * (p1 / 100),
+              id: firstPlace.id
+            },
+            second: {
+              name: secondPlace.name,
+              amount: netPrizePool * (p2 / 100),
+              id: secondPlace.id
+            },
+            third: {
+              name: thirdPlace.name,
+              amount: netPrizePool * (p3 / 100),
+              id: thirdPlace.id
+            },
+            fourth: fourthPlace ? {
+              name: fourthPlace.name,
+              amount: netPrizePool * (p4 / 100),
+              id: fourthPlace.id
+            } : undefined,
+            fifth: fifthPlace ? {
+              name: fifthPlace.name,
+              amount: netPrizePool * (p5 / 100),
+              id: fifthPlace.id
+            } : undefined
+          });
+          setShowPrizeModal(true);
+        } else {
+          await confirmAndCompleteRound([]);
+        }
+
       } else {
-        finalTableAmount = grossPrizePool * (finalTablePercentage / 100);
-      }
+        // Regular Round Logic
+        buyInValue = activeRound.buy_in_value || settings.default_buy_in || 600;
+        const rebuyValue = activeRound.rebuy_value || settings.default_buy_in || 600;
 
-      const netPrizePool = Math.max(0, grossPrizePool - finalTableAmount);
+        const totalRebuys = gamePlayers.reduce((sum, p) => sum + p.rebuys, 0);
+        const totalPlayers = gamePlayers.length;
+        totalEntries = totalPlayers + totalRebuys;
 
-      const firstPlacePercentage = settings.first_place_percentage || 60;
-      const secondPlacePercentage = settings.second_place_percentage || 30;
-      const thirdPlacePercentage = settings.third_place_percentage || 10;
+        // Calculate prize pool breakdown
+        const finalTablePercentage = settings.final_table_percentage || 33.33;
+        const finalTableFixedValue = settings.final_table_fixed_value || 0;
 
-      const firstPlace = gamePlayers.find(p => p.position === 1);
-      const secondPlace = gamePlayers.find(p => p.position === 2);
-      const thirdPlace = gamePlayers.find(p => p.position === 3);
+        const grossPrizePool = (totalPlayers * buyInValue) + (totalRebuys * rebuyValue);
 
-      if (firstPlace && secondPlace && thirdPlace) {
-        setPrizeDistribution({
-          total: netPrizePool,
-          grossTotal: grossPrizePool,
-          finalTableAmount: finalTableAmount,
-          totalEntries: totalEntries,
-          buyInValue: buyInValue,
-          first: {
-            name: firstPlace.name,
-            amount: netPrizePool * (firstPlacePercentage / 100),
-            id: firstPlace.id
-          },
-          second: {
-            name: secondPlace.name,
-            amount: netPrizePool * (secondPlacePercentage / 100),
-            id: secondPlace.id
-          },
-          third: {
-            name: thirdPlace.name,
-            amount: netPrizePool * (thirdPlacePercentage / 100),
-            id: thirdPlace.id
-          },
-        });
-        setShowPrizeModal(true);
-      } else {
-        // If not enough players for prizes, just complete
-        await confirmAndCompleteRound([]);
+        let finalTableAmount = 0;
+        if (finalTableFixedValue > 0) {
+          finalTableAmount = finalTableFixedValue * totalEntries;
+        } else {
+          finalTableAmount = grossPrizePool * (finalTablePercentage / 100);
+        }
+
+        netPrizePool = Math.max(0, grossPrizePool - finalTableAmount);
+
+        const firstPlacePercentage = settings.first_place_percentage || 60;
+        const secondPlacePercentage = settings.second_place_percentage || 30;
+        const thirdPlacePercentage = settings.third_place_percentage || 10;
+
+        const firstPlace = gamePlayers.find(p => p.position === 1);
+        const secondPlace = gamePlayers.find(p => p.position === 2);
+        const thirdPlace = gamePlayers.find(p => p.position === 3);
+
+        if (firstPlace && secondPlace && thirdPlace) {
+          setPrizeDistribution({
+            total: netPrizePool,
+            grossTotal: grossPrizePool,
+            finalTableAmount: finalTableAmount,
+            totalEntries: totalEntries,
+            buyInValue: buyInValue,
+            first: {
+              name: firstPlace.name,
+              amount: netPrizePool * (firstPlacePercentage / 100),
+              id: firstPlace.id
+            },
+            second: {
+              name: secondPlace.name,
+              amount: netPrizePool * (secondPlacePercentage / 100),
+              id: secondPlace.id
+            },
+            third: {
+              name: thirdPlace.name,
+              amount: netPrizePool * (thirdPlacePercentage / 100),
+              id: thirdPlace.id
+            },
+          });
+          setShowPrizeModal(true);
+        } else {
+          // If not enough players for prizes, just complete
+          await confirmAndCompleteRound([]);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao calcular prêmios';
@@ -426,7 +640,8 @@ export default function LiveGame() {
       navigate('/rounds');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao finalizar rodada';
-      alert(message);
+      console.error('Error completing round:', err);
+      alert(`Falha ao finalizar: ${message}`);
     } finally {
       setCompleting(false);
     }
@@ -500,49 +715,64 @@ export default function LiveGame() {
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-white">Rodada {activeRound.round_number}</h2>
-            <p className="text-gray-400 mt-1">
-              {activeRound.round_type === 'regular' ? 'Regular' : activeRound.round_type === 'freezeout' ? 'Freeze Out' : 'Knockout'}
-            </p>
-          </div>
+        <div className="flex justify-between items-center mb-6">
           <div className="flex items-center space-x-4">
-            {!activeRound.is_started ? (
-              <Button onClick={handleStartGame} loading={starting}>
-                <Play className="w-5 h-5" />
-                <span>Iniciar Jogo</span>
-              </Button>
+            {activeRound.is_final_table ? (
+              <Trophy className="w-8 h-8 text-yellow-400 animate-pulse" />
             ) : (
-              <Button onClick={() => setIsPaused(!isPaused)}>
-                {isPaused ? (
-                  <>
-                    <Play className="w-5 h-5" />
-                    <span>Continuar</span>
-                  </>
-                ) : (
-                  <>
-                    <Pause className="w-5 h-5" />
-                    <span>Pausar</span>
-                  </>
-                )}
-              </Button>
+              <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
             )}
-            <Button
-              variant="primary"
-              onClick={() => handleCompleteRound(false)}
-              loading={completing}
-              disabled={eliminatedPlayers.length === 0}
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>Finalizar Rodada</span>
-            </Button>
+            <div>
+              <h2 className="text-2xl font-bold text-white">
+                {activeRound.is_final_table ? 'Mesa Final' : `Rodada ${activeRound.round_number}`}
+              </h2>
+              <div className="flex items-center space-x-2 text-sm text-gray-400">
+                <span>{activeRound.is_final_table ? 'Disputa pelo Título' : activeRound.round_type.toUpperCase()}</span>
+                <span>•</span>
+                <span>{new Date().toLocaleDateString('pt-BR')}</span>
+              </div>
+            </div>
           </div>
+          {isAdmin && (
+            <div className="flex items-center space-x-4">
+              {!activeRound.is_started ? (
+                <Button onClick={handleStartGame} loading={starting}>
+                  <Play className="w-5 h-5" />
+                  <span>Iniciar Jogo</span>
+                </Button>
+              ) : (
+                <Button onClick={() => setIsPaused(!isPaused)}>
+                  {isPaused ? (
+                    <>
+                      <Play className="w-5 h-5" />
+                      <span>Continuar</span>
+                    </>
+                  ) : (
+                    <>
+                      <Pause className="w-5 h-5" />
+                      <span>Pausar</span>
+                    </>
+                  )}
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                onClick={() => handleCompleteRound(false)}
+                loading={completing}
+                disabled={eliminatedPlayers.length === 0}
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>Finalizar Rodada</span>
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Main Blind Display */}
-        <Card className={`bg-gradient-to-br from-purple-500/20 to-pink-500/20 transition-all duration-300 ${isFlashing ? 'ring-4 ring-yellow-400 shadow-2xl shadow-yellow-400/50' : ''
-          }`}>
+        <Card className={isFlashing
+          ? 'animate-flash-gold ring-8 ring-yellow-400 shadow-[0_0_50px_rgba(250,204,21,0.8)]'
+          : 'bg-gradient-to-br from-purple-500/20 to-pink-500/20 transition-all duration-300'
+        }>
           <CardContent className="py-12">
             <div className="text-center space-y-6">
               <div className="text-gray-300 text-sm font-medium uppercase tracking-wider">
@@ -592,16 +822,86 @@ export default function LiveGame() {
               </div>
 
               {/* Level Controls */}
-              {activeRound.is_started && (
-                <div className="flex items-center justify-center space-x-4 pt-4">
-                  <Button variant="secondary" onClick={handleLevelDown} disabled={currentLevel === 0}>
-                    <ChevronDown className="w-5 h-5" />
-                    <span>Nível Anterior</span>
-                  </Button>
-                  <Button variant="secondary" onClick={handleLevelUp} disabled={currentLevel === blindLevels.length - 1}>
-                    <ChevronUp className="w-5 h-5" />
-                    <span>Próximo Nível</span>
-                  </Button>
+              {activeRound.is_started && isAdmin && (
+                <div className="space-y-4 pt-4">
+                  <div className="flex items-center justify-center space-x-4">
+                    <Button variant="secondary" onClick={handleLevelDown} disabled={currentLevel === 0}>
+                      <ChevronDown className="w-5 h-5" />
+                      <span>Nível Anterior</span>
+                    </Button>
+                    <Button variant="secondary" onClick={handleLevelUp} disabled={currentLevel === blindLevels.length - 1}>
+                      <ChevronUp className="w-5 h-5" />
+                      <span>Próximo Nível</span>
+                    </Button>
+                  </div>
+
+                  {/* Test Alerts Controls */}
+                  <div className="flex items-center justify-center space-x-2 text-sm">
+                    <span className="text-gray-500">Testar Alertas:</span>
+                    <button
+                      onClick={() => {
+                        playLevelUpJingle();
+                        setIsFlashing(true);
+                        setTimeout(() => {
+                          safeSpeak("Attention players, the blinds will raise in one minute");
+                        }, 4000);
+                        setTimeout(() => setIsFlashing(false), 4000);
+                      }}
+                      className="px-2 py-1 bg-yellow-500/20 text-yellow-500 rounded hover:bg-yellow-500/30 transition-colors"
+                    >
+                      1 Min
+                    </button>
+                    <button
+                      onClick={() => {
+                        playLevelUpJingle();
+                        setIsFlashing(true);
+                        setTimeout(() => {
+                          const currentLevelText = blindLevels[currentLevel];
+                          if (isBreakLevel(currentLevelText)) {
+                            safeSpeak("Attention players, we are now on a break");
+                          } else {
+                            const parts = currentLevelText.split('/');
+                            if (parts.length === 2) {
+                              const small = parts[0].trim();
+                              const big = parts[1].trim();
+                              safeSpeak(`Attention players, the blinds now have changed. Small blind is ${small} and big blind is ${big}`);
+                            } else {
+                              safeSpeak(`Attention players, the blinds now have changed to ${currentLevelText}`);
+                            }
+                          }
+                        }, 4000);
+                        setTimeout(() => {
+                          setIsFlashing(false);
+                        }, 4000);
+                      }}
+                      className="px-2 py-1 bg-green-500/20 text-green-500 rounded hover:bg-green-500/30 transition-colors"
+                    >
+                      Nível
+                    </button>
+                    <button
+                      onClick={() => {
+                        playLevelUpJingle();
+                        setIsFlashing(true);
+                        setTimeout(() => {
+                          safeSpeak("Attention players, we are now on a break");
+                        }, 4000);
+                        setTimeout(() => {
+                          setIsFlashing(false);
+                        }, 4000);
+                      }}
+                      className="px-2 py-1 bg-orange-500/20 text-orange-500 rounded hover:bg-orange-500/30 transition-colors"
+                    >
+                      Break
+                    </button>
+                    <button
+                      onClick={() => {
+                        safeSpeak("Testing voice. This is a direct call.");
+                      }}
+                      className="px-2 py-1 bg-blue-500/20 text-blue-500 rounded hover:bg-blue-500/30 transition-colors"
+                    >
+                      Voz
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -651,13 +951,15 @@ export default function LiveGame() {
                           </div>
                         )}
                       </div>
-                      <Button
-                        variant="danger"
-                        onClick={() => handleEliminateClick(player)}
-                        className="!px-3 !py-1"
-                      >
-                        <X className="w-4 h-4" />
-                      </Button>
+                      {isAdmin && (
+                        <Button
+                          variant="danger"
+                          onClick={() => handleEliminateClick(player)}
+                          className="!px-3 !py-1"
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -732,37 +1034,55 @@ export default function LiveGame() {
                 >
                   <X className="w-5 h-5" />
                 </button>
-                <h3 className="text-2xl font-bold text-white mb-2">Premiação da Rodada</h3>
+                <h3 className="text-2xl font-bold text-white mb-2">
+                  {prizeDistribution.isFinalTable ? 'Premiação da Mesa Final' : 'Premiação da Rodada'}
+                </h3>
                 <p className="text-gray-400">Parabéns aos vencedores!</p>
               </div>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-3">
                 <div className="text-center py-3 bg-white/5 rounded-lg border border-white/10">
-                  <div className="text-gray-400 text-xs mb-1">Total Arrecadado</div>
+                  <div className="text-gray-400 text-xs mb-1">
+                    {prizeDistribution.isFinalTable ? 'Prêmio Acumulado' : 'Total Arrecadado'}
+                  </div>
                   <div className="text-2xl font-bold text-white">
                     $ {prizeDistribution.grossTotal.toFixed(2)}
                   </div>
-                  <div className="text-gray-400 text-xs mt-1">
-                    {prizeDistribution.totalEntries} entradas × $ {prizeDistribution.buyInValue.toFixed(2)}
-                  </div>
+                  {!prizeDistribution.isFinalTable && (
+                    <div className="text-gray-400 text-xs mt-1">
+                      {prizeDistribution.totalEntries} entradas × $ {prizeDistribution.buyInValue.toFixed(2)}
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="text-center py-3 bg-orange-500/10 rounded-lg border border-orange-500/30">
-                    <div className="text-orange-300 text-xs mb-1">Mesa Final</div>
-                    <div className="text-xl font-bold text-orange-400">
-                      $ {prizeDistribution.finalTableAmount.toFixed(2)}
+                {/* Only show Rebuy/Add-on info if NOT final table */}
+                {!activeRound.is_final_table && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                      <div className="text-gray-400 text-xs mb-1">Buy-in</div>
+                      <div className="text-xl font-bold text-green-400">
+                        $ {activeRound.buy_in_value || settings?.default_buy_in || 600}
+                      </div>
+                    </div>
+                    <div className="bg-white/5 rounded-lg p-3 border border-white/10">
+                      <div className="text-gray-400 text-xs mb-1">Recompra</div>
+                      <div className="text-xl font-bold text-blue-400">
+                        $ {activeRound.rebuy_value || settings?.default_buy_in || 600}
+                      </div>
                     </div>
                   </div>
+                )}
 
-                  <div className="text-center py-3 bg-gradient-to-br from-green-500/20 to-emerald-500/20 rounded-lg border border-green-500/30">
-                    <div className="text-gray-300 text-xs mb-1">Premiação Rodada</div>
-                    <div className="text-xl font-bold text-green-400">
-                      $ {prizeDistribution.total.toFixed(2)}
+                {/* Show Prize Pool for Final Table */}
+                {activeRound.is_final_table && (
+                  <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-lg p-4 border border-yellow-500/30 text-center">
+                    <div className="text-yellow-200 text-sm mb-1 uppercase tracking-wider">Prêmio Acumulado</div>
+                    <div className="text-3xl font-bold text-yellow-400">
+                      $ {prizePool?.final_table_pot?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
                     </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div className="space-y-4">
@@ -778,7 +1098,7 @@ export default function LiveGame() {
                   </div>
                   <Input
                     type="number"
-                    step="0.01"
+                    step="1"
                     value={prizeDistribution.first.amount}
                     onChange={(e) => setPrizeDistribution({
                       ...prizeDistribution,
@@ -800,7 +1120,7 @@ export default function LiveGame() {
                   </div>
                   <Input
                     type="number"
-                    step="0.01"
+                    step="1"
                     value={prizeDistribution.second.amount}
                     onChange={(e) => setPrizeDistribution({
                       ...prizeDistribution,
@@ -822,7 +1142,7 @@ export default function LiveGame() {
                   </div>
                   <Input
                     type="number"
-                    step="0.01"
+                    step="1"
                     value={prizeDistribution.third.amount}
                     onChange={(e) => setPrizeDistribution({
                       ...prizeDistribution,
@@ -831,43 +1151,135 @@ export default function LiveGame() {
                     className="w-32 text-right font-bold text-orange-400 bg-black/20 border-orange-600/30"
                   />
                 </div>
+
+                {/* 4th Place - Only show if Final Table and exists */}
+                {prizeDistribution.isFinalTable && prizeDistribution.fourth && (
+                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-600/20 to-blue-700/20 rounded-lg border border-blue-600/30">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+                        <span className="text-white font-bold text-lg">4º</span>
+                      </div>
+                      <div>
+                        <div className="text-white font-semibold">{prizeDistribution.fourth.name}</div>
+                        <div className="text-blue-300 text-sm">Quarto Lugar</div>
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      step="1"
+                      value={prizeDistribution.fourth.amount}
+                      onChange={(e) => setPrizeDistribution({
+                        ...prizeDistribution,
+                        fourth: { ...prizeDistribution.fourth!, amount: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-32 text-right font-bold text-blue-400 bg-black/20 border-blue-600/30"
+                    />
+                  </div>
+                )}
+
+                {/* 5th Place - Only show if Final Table and exists */}
+                {prizeDistribution.isFinalTable && prizeDistribution.fifth && (
+                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-600/20 to-purple-700/20 rounded-lg border border-purple-600/30">
+                    <div className="flex items-center space-x-4">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
+                        <span className="text-white font-bold text-lg">5º</span>
+                      </div>
+                      <div>
+                        <div className="text-white font-semibold">{prizeDistribution.fifth.name}</div>
+                        <div className="text-purple-300 text-sm">Quinto Lugar</div>
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      step="1"
+                      value={prizeDistribution.fifth.amount}
+                      onChange={(e) => setPrizeDistribution({
+                        ...prizeDistribution,
+                        fifth: { ...prizeDistribution.fifth!, amount: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-32 text-right font-bold text-purple-400 bg-black/20 border-purple-600/30"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Prize Total Validation */}
-              <div className={`p-4 rounded-lg border ${Math.abs((prizeDistribution.first.amount + prizeDistribution.second.amount + prizeDistribution.third.amount) - prizeDistribution.total) < 0.01
-                ? 'bg-green-500/10 border-green-500/30'
-                : 'bg-red-500/10 border-red-500/30'
-                }`}>
+              <div className={`p-4 rounded-lg border ${(() => {
+                const totalPrizes = prizeDistribution.first.amount +
+                  prizeDistribution.second.amount +
+                  prizeDistribution.third.amount +
+                  (prizeDistribution.fourth?.amount || 0) +
+                  (prizeDistribution.fifth?.amount || 0);
+                return Math.abs(totalPrizes - prizeDistribution.total) < 0.01
+                  ? 'bg-green-500/10 border-green-500/30'
+                  : 'bg-red-500/10 border-red-500/30';
+              })()}`}>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-300 font-medium">Soma dos Prêmios:</span>
-                  <span className={`font-bold text-xl ${Math.abs((prizeDistribution.first.amount + prizeDistribution.second.amount + prizeDistribution.third.amount) - prizeDistribution.total) < 0.01
-                    ? 'text-green-400'
-                    : 'text-red-400'
-                    }`}>
-                    $ {(prizeDistribution.first.amount + prizeDistribution.second.amount + prizeDistribution.third.amount).toFixed(2)}
+                  <span className={`font-bold text-xl ${(() => {
+                    const totalPrizes = prizeDistribution.first.amount +
+                      prizeDistribution.second.amount +
+                      prizeDistribution.third.amount +
+                      (prizeDistribution.fourth?.amount || 0) +
+                      (prizeDistribution.fifth?.amount || 0);
+                    return Math.abs(totalPrizes - prizeDistribution.total) < 0.01
+                      ? 'text-green-400'
+                      : 'text-red-400';
+                  })()}`}>
+                    $ {(() => {
+                      const totalPrizes = prizeDistribution.first.amount +
+                        prizeDistribution.second.amount +
+                        prizeDistribution.third.amount +
+                        (prizeDistribution.fourth?.amount || 0) +
+                        (prizeDistribution.fifth?.amount || 0);
+                      return totalPrizes.toFixed(2);
+                    })()}
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-gray-400 text-sm">Total Disponível:</span>
                   <span className="text-gray-300 font-semibold">$ {prizeDistribution.total.toFixed(2)}</span>
                 </div>
-                {Math.abs((prizeDistribution.first.amount + prizeDistribution.second.amount + prizeDistribution.third.amount) - prizeDistribution.total) >= 0.01 && (
-                  <div className="mt-2 text-red-400 text-sm text-center">
-                    ⚠️ A soma dos prêmios deve ser igual ao total disponível!
-                  </div>
-                )}
+                {(() => {
+                  const totalPrizes = prizeDistribution.first.amount +
+                    prizeDistribution.second.amount +
+                    prizeDistribution.third.amount +
+                    (prizeDistribution.fourth?.amount || 0) +
+                    (prizeDistribution.fifth?.amount || 0);
+                  return Math.abs(totalPrizes - prizeDistribution.total) >= 0.01 && (
+                    <div className="mt-2 text-red-400 text-sm text-center">
+                      ⚠️ A soma dos prêmios deve ser igual ao total disponível!
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="pt-4">
                 <Button
-                  onClick={() => confirmAndCompleteRound([
-                    { playerId: prizeDistribution.first.id, amount: prizeDistribution.first.amount },
-                    { playerId: prizeDistribution.second.id, amount: prizeDistribution.second.amount },
-                    { playerId: prizeDistribution.third.id, amount: prizeDistribution.third.amount },
-                  ])}
+                  onClick={() => {
+                    const prizes = [
+                      { playerId: prizeDistribution.first.id, amount: prizeDistribution.first.amount },
+                      { playerId: prizeDistribution.second.id, amount: prizeDistribution.second.amount },
+                      { playerId: prizeDistribution.third.id, amount: prizeDistribution.third.amount },
+                    ];
+                    if (prizeDistribution.fourth) {
+                      prizes.push({ playerId: prizeDistribution.fourth.id, amount: prizeDistribution.fourth.amount });
+                    }
+                    if (prizeDistribution.fifth) {
+                      prizes.push({ playerId: prizeDistribution.fifth.id, amount: prizeDistribution.fifth.amount });
+                    }
+                    confirmAndCompleteRound(prizes);
+                  }}
                   className="w-full"
                   loading={completing}
-                  disabled={Math.abs((prizeDistribution.first.amount + prizeDistribution.second.amount + prizeDistribution.third.amount) - prizeDistribution.total) >= 0.01}
+                  disabled={(() => {
+                    const totalPrizes = prizeDistribution.first.amount +
+                      prizeDistribution.second.amount +
+                      prizeDistribution.third.amount +
+                      (prizeDistribution.fourth?.amount || 0) +
+                      (prizeDistribution.fifth?.amount || 0);
+                    return Math.abs(totalPrizes - prizeDistribution.total) >= 0.01;
+                  })()}
                 >
                   Confirmar e Finalizar
                 </Button>
@@ -933,11 +1345,12 @@ export default function LiveGame() {
                     <Input
                       label="Valor do Bounty ($)"
                       type="number"
-                      step="0.01"
+                      step="1"
                       min="0"
                       value={eliminationKnockout}
                       onChange={(e) => setEliminationKnockout(Math.max(0, parseFloat(e.target.value) || 0))}
                       placeholder="0.00"
+                      disabled={true}
                     />
                   )}
                 </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
+import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
 import { Player } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
@@ -9,6 +10,7 @@ import { UserPlus, Trash2, Edit2, Loader2, X } from 'lucide-react';
 
 export default function Players() {
   const { data: players, loading, error, refresh } = useApi<Player[]>('/api/players');
+  const { isAdmin } = useChampionship();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: '' });
@@ -59,11 +61,7 @@ export default function Players() {
     }
   };
 
-  const handleCancel = () => {
-    setShowForm(false);
-    setEditingId(null);
-    setFormData({ name: '' });
-  };
+
 
   return (
     <Layout>
@@ -88,70 +86,77 @@ export default function Players() {
                 <h3 className="text-xl font-semibold text-white">
                   {editingId ? 'Editar Jogador' : 'Novo Jogador'}
                 </h3>
-                <button onClick={handleCancel} className="text-gray-400 hover:text-white">
+                <button
+                  onClick={() => setShowForm(false)}
+                  className="text-gray-400 hover:text-white"
+                >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <Input
-                  label="Nome do Jogador"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ name: e.target.value })}
-                  placeholder="Digite o nome..."
-                  required
-                />
-                <div className="flex space-x-3">
-                  <Button type="submit" loading={submitting}>
-                    {editingId ? 'Salvar' : 'Adicionar'}
-                  </Button>
-                  <Button type="button" variant="secondary" onClick={handleCancel}>
-                    Cancelar
-                  </Button>
+              <form onSubmit={handleSubmit} className="flex gap-4">
+                <div className="flex-1">
+                  <Input
+                    placeholder="Nome do jogador"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ name: e.target.value })}
+                    disabled={submitting}
+                  />
                 </div>
+                <Button type="submit" loading={submitting}>
+                  Salvar
+                </Button>
               </form>
             </CardContent>
           </Card>
         )}
 
-        <Card>
-          {loading ? (
+        {loading ? (
+          <Card>
             <CardContent className="flex items-center justify-center py-12">
               <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
             </CardContent>
-          ) : error ? (
+          </Card>
+        ) : error ? (
+          <Card>
             <CardContent className="py-12">
               <p className="text-center text-red-400">Erro ao carregar jogadores</p>
             </CardContent>
-          ) : !players || players.length === 0 ? (
+          </Card>
+        ) : !players || players.length === 0 ? (
+          <Card>
             <CardContent className="py-12">
               <p className="text-center text-gray-400">Nenhum jogador cadastrado ainda</p>
             </CardContent>
-          ) : (
-            <div className="divide-y divide-white/5">
-              {players.map((player) => (
-                <div key={player.id} className="px-6 py-4 flex items-center justify-between hover:bg-white/5 transition-colors">
-                  <span className="text-white font-medium">{player.name}</span>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleEdit(player)}
-                      className="p-2 text-gray-400 hover:text-purple-400 transition-colors"
-                    >
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(player.id)}
-                      className="p-2 text-gray-400 hover:text-red-400 transition-colors"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
+          </Card>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {players?.map((player) => (
+              <Card key={player.id} className="hover:bg-white/5 transition-colors">
+                <CardContent className="flex justify-between items-center p-4">
+                  <span className="text-lg font-medium text-white">{player.name}</span>
+                  {isAdmin && (
+                    <div className="flex space-x-2">
+                      <button
+                        onClick={() => handleEdit(player)}
+                        className="p-2 text-blue-400 hover:bg-blue-500/20 rounded-lg transition-colors"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(player.id)}
+                        className="p-2 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
     </Layout>
   );

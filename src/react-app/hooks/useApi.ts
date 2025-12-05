@@ -1,5 +1,9 @@
 import { useState, useEffect, type DependencyList } from 'react';
 
+const API_BASE_URL = import.meta.env.PROD
+  ? 'https://poker-pro.poker-pro-019ab366.workers.dev'
+  : '';
+
 export function useApi<T>(url: string, deps: DependencyList = []) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
@@ -8,7 +12,20 @@ export function useApi<T>(url: string, deps: DependencyList = []) {
   const refresh = async () => {
     try {
       setLoading(true);
-      const response = await fetch(url);
+      const token = localStorage.getItem('admin_token');
+      const currentChampionship = localStorage.getItem('current_championship');
+      const championshipId = currentChampionship ? JSON.parse(currentChampionship).id : null;
+
+      const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+
+      const response = await fetch(fullUrl, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          ...(championshipId ? { 'X-Championship-Id': String(championshipId) } : {}),
+        },
+      });
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -30,10 +47,18 @@ export function useApi<T>(url: string, deps: DependencyList = []) {
 }
 
 export async function apiRequest(url: string, options: RequestInit = {}) {
-  const response = await fetch(url, {
+  const token = localStorage.getItem('admin_token');
+  const currentChampionship = localStorage.getItem('current_championship');
+  const championshipId = currentChampionship ? JSON.parse(currentChampionship).id : null;
+
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+
+  const response = await fetch(fullUrl, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(championshipId ? { 'X-Championship-Id': String(championshipId) } : {}),
       ...options.headers,
     },
   });

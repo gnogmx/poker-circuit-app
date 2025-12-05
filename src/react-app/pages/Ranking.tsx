@@ -1,10 +1,12 @@
 import { useApi } from '@/react-app/hooks/useApi';
-import { RankingEntry } from '@/shared/types';
+import { RankingEntry, TournamentSettings } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import { Trophy, Medal, Download, Loader2, DollarSign } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import ChampionshipPodiumModal from '@/react-app/components/ChampionshipPodiumModal';
+import FinalTableModal from '@/react-app/components/FinalTableModal';
 
 interface RankingEntryWithRounds extends RankingEntry {
   round_results: { [key: number]: number };
@@ -18,11 +20,30 @@ interface RankingResponse {
 
 export default function Ranking() {
   const { data, loading, error } = useApi<RankingResponse>('/api/rankings');
+  const { data: settings } = useApi<TournamentSettings>('/api/tournament-settings');
   const [exporting, setExporting] = useState(false);
+  const [showPodiumModal, setShowPodiumModal] = useState(false);
+  const [showFinalTableModal, setShowFinalTableModal] = useState(false);
 
   const rankings = data?.rankings || [];
   const finalTablePrizePool = data?.final_table_prize_pool || 0;
   const rounds = data?.rounds || [];
+
+  // Check if championship is completed
+  const totalRounds = settings?.total_rounds || 24;
+  const completedRounds = rounds.length;
+  const isChampionshipComplete = completedRounds >= totalRounds && completedRounds > 0;
+
+  // Show podium modal when championship is completed (only once)
+  useEffect(() => {
+    if (isChampionshipComplete && rankings.length > 0) {
+      const hasSeenPodium = localStorage.getItem('podium_shown');
+      if (!hasSeenPodium) {
+        setShowPodiumModal(true);
+        localStorage.setItem('podium_shown', 'true');
+      }
+    }
+  }, [isChampionshipComplete, rankings.length]);
 
   const handleExport = async () => {
     try {
@@ -214,6 +235,24 @@ export default function Ranking() {
             </CardContent>
           </Card>
         )}
+
+        <ChampionshipPodiumModal
+          isOpen={showPodiumModal}
+          onClose={() => setShowPodiumModal(false)}
+          topPlayers={rankings.slice(0, 3)}
+          onViewFinalTable={() => {
+            setShowPodiumModal(false);
+            setShowFinalTableModal(true);
+          }}
+        />
+
+        <FinalTableModal
+          isOpen={showFinalTableModal}
+          onClose={() => setShowFinalTableModal(false)}
+          rankings={rankings}
+          prizePool={finalTablePrizePool}
+          topPlayersCount={settings?.final_table_top_players || 9}
+        />
       </div>
     </Layout>
   );
