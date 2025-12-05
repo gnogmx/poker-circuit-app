@@ -40,37 +40,7 @@ export default function LiveGame() {
   const { data: settings, loading: loadingSettings } = useApi<TournamentSettings>('/api/tournament-settings');
   const { data: prizePool } = useApi<{ final_table_pot: number }>('/api/championships/prize-pool');
 
-  // Debug logs
-  useEffect(() => {
-    console.log('LiveGame State:', { activeRound, settings, loadingSettings });
-  }, [activeRound, settings, loadingSettings]);
-
-  if (!activeRound && !loadingSettings) {
-    return (
-      <Layout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
-          <Coffee className="w-16 h-16 text-gray-500 mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">Nenhuma rodada ativa</h2>
-          <p className="text-gray-400 mb-6">Inicie uma rodada na página de Rodadas para começar o jogo.</p>
-          <Button onClick={() => navigate('/rounds')}>
-            Ir para Rodadas
-          </Button>
-        </div>
-      </Layout>
-    );
-  }
-
-  // Wait for prizePool to load if this is a final table
-  if (!settings || !activeRound || loadingSettings || (activeRound.is_final_table && !prizePool)) {
-    return (
-      <Layout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
-        </div>
-      </Layout>
-    );
-  }
-
+  // All hooks must be called before any conditional returns
   const [gamePlayers, setGamePlayers] = useState<GamePlayer[]>([]);
   const [isPaused, setIsPaused] = useState(false);
   const [currentLevel, setCurrentLevel] = useState(0);
@@ -104,6 +74,38 @@ export default function LiveGame() {
   const intervalRef = useRef<number | null>(null);
   const warningAudioRef = useRef<HTMLAudioElement | null>(null);
   const levelUpAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Debug logs
+  useEffect(() => {
+    console.log('LiveGame State:', { activeRound, settings, loadingSettings });
+  }, [activeRound, settings, loadingSettings]);
+
+  // Early returns AFTER all hooks are declared
+  if (!activeRound && !loadingSettings) {
+    return (
+      <Layout>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
+          <Coffee className="w-16 h-16 text-gray-500 mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-2">Nenhuma rodada ativa</h2>
+          <p className="text-gray-400 mb-6">Inicie uma rodada na página de Rodadas para começar o jogo.</p>
+          <Button onClick={() => navigate('/rounds')}>
+            Ir para Rodadas
+          </Button>
+        </div>
+      </Layout>
+    );
+  }
+
+  // Wait for prizePool to load if this is a final table
+  if (!settings || !activeRound || loadingSettings || (activeRound.is_final_table && !prizePool)) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+        </div>
+      </Layout>
+    );
+  }
 
   const safeSpeak = (text: string) => {
     try {
