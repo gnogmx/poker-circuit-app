@@ -5,6 +5,8 @@ import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import { Trophy, Medal, Download, Loader2, DollarSign } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router';
+import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
 import ChampionshipPodiumModal from '@/react-app/components/ChampionshipPodiumModal';
 import FinalTableModal from '@/react-app/components/FinalTableModal';
 
@@ -19,28 +21,43 @@ interface RankingResponse {
 }
 
 export default function Ranking() {
+  const navigate = useNavigate();
+  const { isSingleTournament, currentChampionship } = useChampionship();
   const { data, loading, error } = useApi<RankingResponse>('/api/rankings');
   const { data: settings } = useApi<TournamentSettings>('/api/tournament-settings');
   const [exporting, setExporting] = useState(false);
   const [showPodiumModal, setShowPodiumModal] = useState(false);
   const [showFinalTableModal, setShowFinalTableModal] = useState(false);
 
+  // Redirect if single tournament - rankings not available
+  useEffect(() => {
+    if (isSingleTournament) {
+      navigate('/live');
+    }
+  }, [isSingleTournament, navigate]);
+
   const rankings = data?.rankings || [];
   const finalTablePrizePool = data?.final_table_prize_pool || 0;
   const rounds = data?.rounds || [];
 
-  // Check if championship is completed
+  // Check if championship completed the configured total_rounds (exclude final table)
   const totalRounds = settings?.total_rounds || 24;
-  const completedRounds = rounds.length;
-  const isChampionshipComplete = completedRounds >= totalRounds && completedRounds > 0;
+  const completedRounds = rounds.filter((r: unknown) => {
+    const round = r as { status?: string; is_final_table?: number };
+    return round.status === 'completed' && !round.is_final_table;
+  }).length;
+  const isChampionshipComplete = completedRounds >= totalRounds && totalRounds > 0;
 
-  // Show podium modal when championship is completed (only once)
+  // Show podium modal when championship is completed (only once per championship)
   useEffect(() => {
     if (isChampionshipComplete && rankings.length > 0) {
-      const hasSeenPodium = localStorage.getItem('podium_shown');
+      // Use championship-specific key
+      const cId = currentChampionship?.id || 'default';
+      const championshipKey = `podium_shown_${cId}`;
+      const hasSeenPodium = sessionStorage.getItem(championshipKey);
       if (!hasSeenPodium) {
         setShowPodiumModal(true);
-        localStorage.setItem('podium_shown', 'true');
+        sessionStorage.setItem(championshipKey, 'true');
       }
     }
   }, [isChampionshipComplete, rankings.length]);
@@ -75,10 +92,16 @@ export default function Ranking() {
             <h2 className="text-3xl font-bold text-white">Ranking do Campeonato</h2>
             <p className="text-gray-400 mt-1">Acompanhe a classificação geral dos jogadores</p>
           </div>
-          <Button onClick={handleExport} loading={exporting} variant="secondary">
-            <Download className="w-4 h-4" />
-            <span>Exportar Dados</span>
-          </Button>
+          <div className="flex gap-2 print:hidden">
+            <Button onClick={() => window.print()} variant="secondary">
+              <Download className="w-4 h-4" />
+              <span>Imprimir</span>
+            </Button>
+            <Button onClick={handleExport} loading={exporting} variant="secondary">
+              <Download className="w-4 h-4" />
+              <span>Exportar CSV</span>
+            </Button>
+          </div>
         </div>
 
         {finalTablePrizePool > 0 && (
@@ -92,7 +115,7 @@ export default function Ranking() {
                   <div>
                     <div className="text-gray-300 text-sm font-medium">Prêmio Acumulado Mesa Final</div>
                     <div className="text-4xl font-bold text-white">
-                      $ {finalTablePrizePool.toFixed(2)}
+                      $ {finalTablePrizePool.toFixed(0)}
                     </div>
                   </div>
                 </div>
@@ -157,10 +180,10 @@ export default function Ranking() {
                           <span className="text-white font-medium">{entry.player_name}</span>
                         </td>
                         <td className="px-6 py-4 text-center">
-                          <span className="text-green-400 font-bold">$ {(entry.total_prize || 0).toFixed(2)}</span>
+                          <span className="text-green-400 font-bold">$ {(entry.total_prize || 0).toFixed(0)}</span>
                         </td>
                         <td className="px-6 py-4 text-center">
-                          <span className="text-red-400">$ {(entry.total_entries || 0).toFixed(2)}</span>
+                          <span className="text-red-400">{(entry.total_entries || 0).toFixed(0)}</span>
                         </td>
                         <td className="px-6 py-4 text-center">
                           <span className="text-purple-400 font-bold text-lg">{entry.total_points}</span>

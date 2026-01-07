@@ -94,7 +94,10 @@ export const TournamentSettingsSchema = z.object({
   first_place_percentage: z.number().optional(),
   second_place_percentage: z.number().optional(),
   third_place_percentage: z.number().optional(),
+  fourth_place_percentage: z.number().optional(),
+  fifth_place_percentage: z.number().optional(),
   final_table_top_players: z.number().optional(),
+
   final_table_1st_percentage: z.number().optional(),
   final_table_2nd_percentage: z.number().optional(),
   final_table_3rd_percentage: z.number().optional(),
@@ -102,6 +105,7 @@ export const TournamentSettingsSchema = z.object({
   final_table_5th_percentage: z.number().optional(),
   rules_text: z.string().optional(),
   final_table_date: z.string().optional(),
+  prize_distribution: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -116,6 +120,8 @@ export const UpdateTournamentSettingsSchema = z.object({
   first_place_percentage: z.number().optional(),
   second_place_percentage: z.number().optional(),
   third_place_percentage: z.number().optional(),
+  fourth_place_percentage: z.number().optional(),
+  fifth_place_percentage: z.number().optional(),
   final_table_top_players: z.number().int().positive().optional(),
   final_table_1st_percentage: z.number().optional(),
   final_table_2nd_percentage: z.number().optional(),
@@ -124,6 +130,7 @@ export const UpdateTournamentSettingsSchema = z.object({
   final_table_5th_percentage: z.number().optional(),
   rules_text: z.string().optional(),
   final_table_date: z.string().optional(),
+  prize_distribution: z.array(z.number()).optional(),
 });
 
 export type Player = z.infer<typeof PlayerSchema>;
@@ -198,12 +205,14 @@ export const ChampionshipSchema = z.object({
   code: z.string(),
   logo_url: z.string().nullable(),
   created_by: z.number(),
+  is_single_tournament: z.number().optional(),
   created_at: z.string(),
 });
 
 export const CreateChampionshipSchema = z.object({
-  name: z.string().min(1, "Nome é obrigatório"),
+  name: z.string().min(1),
   logo_url: z.string().optional(),
+  is_single_tournament: z.boolean().optional(),
 });
 
 export const JoinChampionshipSchema = z.object({
@@ -253,4 +262,5 @@ export type UpdateRoundSchedule = z.infer<typeof UpdateRoundScheduleSchema>;
 // Extended types with relationships
 export type ChampionshipWithRole = Championship & {
   role: 'admin' | 'player';
+  is_single_tournament?: number;
 };

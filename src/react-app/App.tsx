@@ -9,6 +9,8 @@ import Settings from "@/react-app/pages/Settings";
 import LiveGame from "@/react-app/pages/LiveGame";
 import Login from "@/react-app/pages/Login";
 import Register from "@/react-app/pages/Register";
+import QuickSetup from "@/react-app/pages/QuickSetup";
+import WelcomeScreen from "@/react-app/pages/WelcomeScreen";
 
 export default function App() {
   return (
@@ -22,6 +24,8 @@ export default function App() {
               <Route path="/rounds" element={<Rounds />} />
               <Route path="/live" element={<LiveGame />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/quick-setup" element={<QuickSetup />} />
+              <Route path="/welcome" element={<WelcomeScreen />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
             </Routes>

@@ -1,32 +1,89 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
 import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
-import { Player, RoundWithResults } from '@/shared/types';
+import { Player, RoundWithResults, TournamentSettings, RankingEntry } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
 import { Plus, Trash2, Loader2, X, Calendar, DollarSign, Radio, Trophy, Users, RefreshCw } from 'lucide-react';
+import ChampionshipPodiumModal from '@/react-app/components/ChampionshipPodiumModal';
+import FinalTableModal from '@/react-app/components/FinalTableModal';
+import ConfirmationModal from '@/react-app/components/ConfirmationModal';
 
 type RoundType = 'regular' | 'freezeout' | 'knockout';
 
+interface RankingResponse {
+  rankings: RankingEntry[];
+  final_table_prize_pool: number;
+  rounds: Array<{ id: number; round_number: number }>;
+}
+
 export default function Rounds() {
+  const navigate = useNavigate();
   const { data: rounds, loading: loadingRounds, error, refresh: refreshRounds } = useApi<RoundWithResults[]>('/api/rounds');
-  const { isAdmin } = useChampionship();
+  const { isAdmin, isSingleTournament, currentChampionship } = useChampionship();
   const { data: players, loading: loadingPlayers } = useApi<Player[]>('/api/players');
+  const { data: rankingData } = useApi<RankingResponse>('/api/rankings');
+  const { data: settings } = useApi<TournamentSettings>('/api/tournament-settings');
+
+  // Redirect if single tournament - rounds not available
+  useEffect(() => {
+    if (isSingleTournament) {
+      navigate('/live');
+    }
+  }, [isSingleTournament, navigate]);
+
   const [showForm, setShowForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     round_date: new Date().toISOString().split('T')[0],
     notes: '',
     round_type: 'regular' as RoundType,
-    buy_in_value: '600',
-    rebuy_value: '600',
+    buy_in_value: '0',
+    rebuy_value: '0',
     knockout_value: '50',
   });
+
+  // Update default values when settings load
+  useEffect(() => {
+    if (settings?.default_buy_in) {
+      setFormData(prev => ({
+        ...prev,
+        buy_in_value: (settings.default_buy_in || 0).toString(),
+        rebuy_value: (settings.default_buy_in || 0).toString()
+      }));
+    }
+  }, [settings]);
+
   const [selectedPlayers, setSelectedPlayers] = useState<Set<number>>(new Set());
   const [managingRound, setManagingRound] = useState<RoundWithResults | null>(null);
   const [replacingPlayerId, setReplacingPlayerId] = useState<number | null>(null);
+
+  // Modal states
+  const [showPodiumModal, setShowPodiumModal] = useState(false);
+  const [showFinalTableModal, setShowFinalTableModal] = useState(false);
+
+  // Check for championship completion
+  useEffect(() => {
+    if (!rounds || !settings || !rankingData || !currentChampionship) return;
+
+    const totalRounds = settings.total_rounds || 24;
+    const completedRoundsCount = rounds.filter(r => r.status === 'completed' && !r.is_final_table).length;
+
+    // Trigger if we reached the limit. Ensure rankings exist (safeguard).
+    if (completedRoundsCount >= totalRounds && rankingData.rankings.length > 0) {
+      // Use championship-specific key to avoid conflicts
+      const championshipKey = `podium_shown_${currentChampionship.id}`;
+      const hasSeenPodium = sessionStorage.getItem(championshipKey);
+
+      if (!hasSeenPodium) {
+        setShowPodiumModal(true);
+        sessionStorage.setItem(championshipKey, 'true');
+      }
+    }
+  }, [rounds, settings, rankingData, currentChampionship]);
 
   const handlePlayerToggle = (playerId: number) => {
     const newSelected = new Set(selectedPlayers);
@@ -43,6 +100,16 @@ export default function Rounds() {
 
     if (selectedPlayers.size === 0) {
       alert('Selecione pelo menos um jogador');
+      return;
+    }
+
+    // Check if we've reached the maximum number of rounds (total_rounds + 1 for final table)
+    const totalRounds = settings?.total_rounds || 24;
+    const maxRounds = totalRounds + 1; // +1 for final table
+    const currentRoundCount = rounds?.length || 0;
+
+    if (currentRoundCount >= maxRounds) {
+      alert(`Limite de rodadas atingido! Máximo: ${totalRounds} rodadas regulares + 1 mesa final = ${maxRounds} total.`);
       return;
     }
 
@@ -71,8 +138,8 @@ export default function Rounds() {
         round_date: new Date().toISOString().split('T')[0],
         notes: '',
         round_type: 'regular',
-        buy_in_value: '600',
-        rebuy_value: '600',
+        buy_in_value: (settings?.default_buy_in || 0).toString(),
+        rebuy_value: (settings?.default_buy_in || 0).toString(),
         knockout_value: '50',
       });
       setSelectedPlayers(new Set());
@@ -88,13 +155,24 @@ export default function Rounds() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Tem certeza que deseja excluir esta rodada?')) return;
+    // Confirm removed for ease of testing
+    // if (!confirm('Tem certeza que deseja excluir esta rodada?')) return;
 
     try {
       await apiRequest(`/api/rounds/${id}`, { method: 'DELETE' });
+
+      // Clear podium/final table flags so they can show again if championship becomes complete
+      const championshipId = currentChampionship?.id || 'default';
+      const championshipKey = `podium_shown_${championshipId}`;
+      const finalTableKey = `final_table_shown_${championshipId}`;
+      sessionStorage.removeItem(championshipKey);
+      sessionStorage.removeItem(finalTableKey);
+
       refreshRounds();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to delete round:', err);
+      const message = err instanceof Error ? err.message : 'Erro desconhecido';
+      alert('Erro ao excluir rodada: ' + message);
     }
   };
 
@@ -111,10 +189,39 @@ export default function Rounds() {
     setSelectedPlayers(new Set());
     setSelectedPlayers(new Set());
   };
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => { },
+  });
+
+  const handleReplacePlayerRequest = (roundId: number, playerIdToRemove: number) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Substituir Jogador',
+      message: 'Tem certeza que deseja substituir este jogador pelo próximo do ranking?',
+      onConfirm: () => handleReplacePlayer(roundId, playerIdToRemove)
+    });
+  };
+
+  const handleDeleteRequest = (roundId: number) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Excluir Rodada',
+      message: 'Tem certeza que deseja excluir esta rodada? Esta ação não pode ser desfeita.',
+      onConfirm: () => handleDelete(roundId)
+    });
+  };
 
   const handleReplacePlayer = async (roundId: number, playerIdToRemove: number) => {
-    if (!confirm('Tem certeza que deseja substituir este jogador pelo próximo do ranking?')) return;
-
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
     try {
       setReplacingPlayerId(playerIdToRemove);
       const res = await apiRequest(
@@ -126,7 +233,6 @@ export default function Rounds() {
       ) as { success: boolean; replaced: boolean; newPlayer?: Player; message?: string };
 
       if (res.replaced && res.newPlayer) {
-        alert(`Jogador substituído com sucesso! Novo jogador: ${res.newPlayer.name}`);
         refreshRounds();
         // Update local state to reflect change immediately
         if (managingRound) {
@@ -138,8 +244,9 @@ export default function Rounds() {
       } else {
         alert(res.message || 'Não foi possível substituir o jogador.');
       }
-    } catch (err: any) {
-      alert(err.message || 'Erro ao substituir jogador');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro ao substituir jogador';
+      alert(message);
     } finally {
       setReplacingPlayerId(null);
     }
@@ -164,12 +271,38 @@ export default function Rounds() {
       <div className="space-y-6">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-2xl font-bold text-white">Rodadas</h2>
-          {isAdmin && !showForm && !activeRound && (
-            <Button onClick={() => setShowForm(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Nova Rodada
-            </Button>
-          )}
+          <div className="flex gap-2">
+            {isAdmin && !showForm && !activeRound && !rounds?.find(r => r.status === 'upcoming') && (
+              <>
+                {rounds && settings && rounds.filter(r => r.status === 'completed' && !r.is_final_table).length >= (settings.total_rounds || 24) ? (
+                  !rounds.find(r => r.is_final_table) && (
+                    <Button
+                      onClick={async () => {
+                        if (!confirm('Deseja gerar a Mesa Final agora? Isso irá selecionar os 9 melhores jogadores.')) return;
+                        try {
+                          await apiRequest('/api/final-table/generate', { method: 'POST' });
+                          refreshRounds();
+                          window.location.reload(); // Reload to ensure states update and podium/final table modals work if triggered
+                        } catch (err: unknown) {
+                          const message = err instanceof Error ? err.message : 'Erro ao gerar Mesa Final';
+                          alert(message);
+                        }
+                      }}
+                      className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold"
+                    >
+                      <Trophy className="w-4 h-4 mr-2" />
+                      Gerar Mesa Final
+                    </Button>
+                  )
+                ) : (
+                  <Button onClick={() => setShowForm(true)}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Nova Rodada
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {activeRound && (
@@ -240,9 +373,10 @@ export default function Rounds() {
                           try {
                             await apiRequest(`/api/rounds/${round.id}/start`, { method: 'POST' });
                             refreshRounds();
-                            window.location.href = '/live-game';
-                          } catch (err: any) {
-                            alert(err.message || 'Erro ao iniciar rodada');
+                            window.location.href = '/live';
+                          } catch (err: unknown) {
+                            const message = err instanceof Error ? err.message : 'Erro ao iniciar rodada';
+                            alert(message);
                           }
                         }}
                         className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700"
@@ -302,7 +436,15 @@ export default function Rounds() {
                   <div className="grid grid-cols-3 gap-3">
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, round_type: 'regular' })}
+                      onClick={() => {
+                        const baseBuyIn = settings?.default_buy_in || 0;
+                        setFormData({
+                          ...formData,
+                          round_type: 'regular',
+                          buy_in_value: baseBuyIn.toString(),
+                          rebuy_value: baseBuyIn.toString()
+                        });
+                      }}
                       className={`p-3 rounded-lg border transition-all ${formData.round_type === 'regular'
                         ? 'bg-purple-500/20 border-purple-500 text-purple-300'
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
@@ -313,7 +455,15 @@ export default function Rounds() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, round_type: 'freezeout' })}
+                      onClick={() => {
+                        const baseBuyIn = settings?.default_buy_in || 0;
+                        setFormData({
+                          ...formData,
+                          round_type: 'freezeout',
+                          buy_in_value: (baseBuyIn * 2).toString(),
+                          rebuy_value: '0'
+                        });
+                      }}
                       className={`p-3 rounded-lg border transition-all ${formData.round_type === 'freezeout'
                         ? 'bg-purple-500/20 border-purple-500 text-purple-300'
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
@@ -324,7 +474,15 @@ export default function Rounds() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setFormData({ ...formData, round_type: 'knockout' })}
+                      onClick={() => {
+                        const baseBuyIn = settings?.default_buy_in || 0;
+                        setFormData({
+                          ...formData,
+                          round_type: 'knockout',
+                          buy_in_value: baseBuyIn.toString(),
+                          rebuy_value: baseBuyIn.toString()
+                        });
+                      }}
                       className={`p-3 rounded-lg border transition-all ${formData.round_type === 'knockout'
                         ? 'bg-purple-500/20 border-purple-500 text-purple-300'
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
@@ -489,26 +647,26 @@ export default function Rounds() {
                         {round.buy_in_value && (
                           <div className="flex items-center space-x-1">
                             <DollarSign className="w-3 h-3" />
-                            <span>Buy-in: $ {round.buy_in_value.toFixed(2)}</span>
+                            <span>Buy-in: $ {round.buy_in_value.toFixed(0)}</span>
                           </div>
                         )}
                         {round.rebuy_value && round.round_type === 'regular' && (
                           <div className="flex items-center space-x-1">
                             <DollarSign className="w-3 h-3" />
-                            <span>Recompra: $ {round.rebuy_value.toFixed(2)}</span>
+                            <span>Recompra: $ {round.rebuy_value.toFixed(0)}</span>
                           </div>
                         )}
                         {round.knockout_value && round.round_type === 'knockout' && (
                           <div className="flex items-center space-x-1">
                             <DollarSign className="w-3 h-3" />
-                            <span>Knockout: $ {round.knockout_value.toFixed(2)}</span>
+                            <span>Knockout: $ {round.knockout_value.toFixed(0)}</span>
                           </div>
                         )}
                       </div>
                     </div>
                     {isAdmin && (
                       <button
-                        onClick={() => handleDelete(round.id)}
+                        onClick={() => handleDeleteRequest(round.id)}
                         className="text-gray-400 hover:text-red-400 transition-colors"
                       >
                         <Trash2 className="w-5 h-5" />
@@ -545,7 +703,7 @@ export default function Rounds() {
                             )}
                             {round.round_type === 'knockout' && (
                               <td className="px-4 py-3 text-right text-green-400">
-                                {result.knockout_earnings > 0 ? `$ ${result.knockout_earnings.toFixed(2)}` : '-'}
+                                {result.knockout_earnings > 0 ? `$ ${result.knockout_earnings.toFixed(0)}` : '-'}
                               </td>
                             )}
                             <td className="px-4 py-3 text-right text-purple-400 font-semibold">
@@ -601,7 +759,7 @@ export default function Rounds() {
                         <span className="text-white font-medium">{player.name}</span>
                       </div>
                       <button
-                        onClick={() => handleReplacePlayer(managingRound.id, player.id)}
+                        onClick={() => handleReplacePlayerRequest(managingRound.id, player.id)}
                         disabled={replacingPlayerId === player.id}
                         className="flex items-center gap-1 px-3 py-1.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20 transition-colors text-xs disabled:opacity-50"
                         title="Substituir pelo próximo do ranking"
@@ -632,6 +790,37 @@ export default function Rounds() {
           </Card>
         </div>
       )}
+
+      {/* Modals for Championship End */}
+      {rankingData && (
+        <>
+          <ChampionshipPodiumModal
+            isOpen={showPodiumModal}
+            onClose={() => setShowPodiumModal(false)}
+            topPlayers={rankingData.rankings.slice(0, 3)}
+            onViewFinalTable={() => {
+              setShowPodiumModal(false);
+              setShowFinalTableModal(true);
+            }}
+          />
+
+          <FinalTableModal
+            isOpen={showFinalTableModal}
+            onClose={() => setShowFinalTableModal(false)}
+            rankings={rankingData.rankings}
+            prizePool={rankingData.final_table_prize_pool}
+            topPlayersCount={settings?.final_table_top_players || 9}
+          />
+        </>
+      )}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+      />
     </Layout>
   );
 }

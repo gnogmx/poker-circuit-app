@@ -1,15 +1,19 @@
 import { Link, useLocation, useNavigate } from 'react-router';
-import { Trophy, ListOrdered, Settings, Radio, LogIn, LogOut, Shield, RefreshCw } from 'lucide-react';
+import { Trophy, ListOrdered, Settings, Radio, LogIn, LogOut, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/react-app/contexts/AuthContext';
 import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, isAdmin, logout } = useAuth();
-  const { currentChampionship, setCurrentChampionship } = useChampionship();
+  const { user, logout } = useAuth();
+  const { currentChampionship, setCurrentChampionship, isSingleTournament } = useChampionship();
 
-  const navItems = [
+  //Filter out all navigation for single tournament (only quick-setup and /live available)
+  const navItems = isSingleTournament ? [
+    { path: '/live', icon: Radio, label: 'Ao Vivo' },
+    { path: '/quick-setup', icon: Settings, label: 'Configurações' },
+  ] : [
     { path: '/', icon: Trophy, label: 'Ranking' },
     { path: '/rounds', icon: ListOrdered, label: 'Rodadas' },
     { path: '/live', icon: Radio, label: 'Ao Vivo' },
@@ -25,59 +29,65 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     setCurrentChampionship(null);
   };
 
+  // Force remount when championship type changes
+  const layoutKey = `${currentChampionship?.id}-${isSingleTournament}`;
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      <nav className="bg-black/30 backdrop-blur-xl border-b border-white/10">
+    <div key={layoutKey} className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      <header className="bg-gradient-to-r from-purple-900/50 to-indigo-900/50 border-b border-white/10 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-2">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shadow-lg shadow-purple-500/50">
-                <Trophy className="w-6 h-6 text-white" />
-              </div>
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+            {/* Logo and Game Info */}
+            <div className="flex items-center space-x-4">
+              <div className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
                 Poker Pro
-              </h1>
+              </div>
               {currentChampionship && (
-                <div className="flex items-center space-x-1 px-2 py-1 rounded-full bg-purple-500/20 border border-purple-500/30">
-                  <span className="text-xs font-semibold text-purple-400">{currentChampionship.name}</span>
-                </div>
-              )}
-              {user && (
-                <div className="flex items-center space-x-1 px-2 py-1 rounded-full bg-white/10 border border-white/20">
-                  <Shield className="w-4 h-4 text-gray-400" />
-                  <span className="text-xs font-semibold text-gray-400">{user.name}</span>
+                <div className="flex items-center space-x-2">
+                  <span className="text-white font-semibold">{currentChampionship.name}</span>
+                  <span className={`px-2 py-0.5 rounded text-xs font-semibold ${isSingleTournament
+                    ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                    : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                    }`}>
+                    {isSingleTournament ? '🎲 JOGO ÚNICO' : '🏆 CAMPEONATO'}
+                  </span>
                 </div>
               )}
             </div>
-            <div className="flex items-center space-x-1">
+
+            {/* Navigation */}
+            <nav className="flex space-x-1">
               {navItems.map((item) => {
-                const Icon = item.icon;
                 const isActive = location.pathname === item.path;
+                const Icon = item.icon;
                 return (
                   <Link
                     key={item.path}
                     to={item.path}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${isActive
-                      ? 'bg-purple-500/20 text-purple-300 shadow-lg shadow-purple-500/20'
-                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${isActive
+                        ? 'bg-white/10 text-white'
+                        : 'text-gray-300 hover:bg-white/5 hover:text-white'
                       }`}
                   >
-                    <Icon className="w-5 h-5" />
-                    <span className="hidden sm:inline font-medium">{item.label}</span>
+                    <Icon className="w-4 h-4" />
+                    <span className="font-medium">{item.label}</span>
                   </Link>
                 );
-              })
-              }
+              })}
+            </nav>
+
+            {/* Right side actions */}
+            <div className="flex items-center space-x-3">
               {currentChampionship && (
                 <button
                   onClick={handleSwitchChampionship}
-                  className="flex items-center space-x-2 px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all"
+                  className="flex items-center space-x-2 px-4 py-2 rounded-lg text-gray-300 hover:text-white hover:bg-white/5 transition-all"
                 >
                   <RefreshCw className="w-5 h-5" />
                   <span className="hidden sm:inline font-medium">Trocar</span>
                 </button>
               )}
-              {isAdmin ? (
+              {user ? (
                 <button
                   onClick={handleLogout}
                   className="flex items-center space-x-2 px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-all"
@@ -97,7 +107,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </div>
-      </nav>
+      </header>
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {children}
       </main>

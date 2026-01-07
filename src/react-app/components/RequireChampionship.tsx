@@ -8,8 +8,11 @@ export default function RequireChampionship({ children }: { children: React.Reac
     const { currentChampionship, loading } = useChampionship();
     const location = useLocation();
 
-    // Don't require championship for login/register pages
-    if (location.pathname === '/login' || location.pathname === '/register') {
+    // Don't require championship for login/register/welcome/quick-setup pages
+    if (location.pathname === '/login' ||
+        location.pathname === '/register' ||
+        location.pathname === '/welcome' ||
+        location.pathname === '/quick-setup') {
         return <>{children}</>;
     }
 

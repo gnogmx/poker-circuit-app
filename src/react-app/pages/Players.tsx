@@ -7,6 +7,7 @@ import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
 import { UserPlus, Trash2, Edit2, Loader2, X } from 'lucide-react';
+import ConfirmationModal from '@/react-app/components/ConfirmationModal';
 
 export default function Players() {
   const { data: players, loading, error, refresh } = useApi<Player[]>('/api/players');
@@ -15,6 +16,18 @@ export default function Players() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => { },
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,14 +64,20 @@ export default function Players() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Tem certeza que deseja excluir este jogador?')) return;
-
-    try {
-      await apiRequest(`/api/players/${id}`, { method: 'DELETE' });
-      refresh();
-    } catch (err) {
-      console.error('Failed to delete player:', err);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Excluir Jogador',
+      message: 'Tem certeza que deseja excluir este jogador?',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        try {
+          await apiRequest(`/api/players/${id}`, { method: 'DELETE' });
+          refresh();
+        } catch (err) {
+          console.error('Failed to delete player:', err);
+        }
+      }
+    });
   };
 
 
@@ -158,6 +177,14 @@ export default function Players() {
           </div>
         )}
       </div>
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+      />
     </Layout>
   );
 }

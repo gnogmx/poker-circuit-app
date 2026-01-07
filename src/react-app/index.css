@@ -21,3 +21,34 @@
 .animate-flash-gold {
   animation: flash-gold 1s ease-in-out infinite;
 }
+
+@media print {
+  .layout-sidebar,
+  .print\:hidden,
+  button {
+    display: none !important;
+  }
+  
+  .layout-content {
+    margin-left: 0 !important;
+    padding: 0 !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Force table text to be visible/black */
+  table, th, td, tr, .text-white, .text-gray-300, .text-gray-400 {
+    color: black !important;
+    text-shadow: none !important;
+  }
+  
+  /* Reset Card styles for print */
+  .border, .bg-white\/5, .bg-gradient-to-br {
+    border: 1px solid #ccc !important;
+    background: none !important;
+    box-shadow: none !important;
+  }
+}

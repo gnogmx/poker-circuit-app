@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import type { ChampionshipWithRole } from '@/shared/types';
 import { useAuth } from './AuthContext';
 
@@ -7,6 +7,7 @@ interface ChampionshipContextType {
     championships: ChampionshipWithRole[];
     loading: boolean;
     isAdmin: boolean;
+    isSingleTournament: boolean;
     setCurrentChampionship: (championship: ChampionshipWithRole | null) => void;
     refreshChampionships: () => Promise<void>;
 }
@@ -15,12 +16,15 @@ const ChampionshipContext = createContext<ChampionshipContextType | undefined>(u
 
 export function ChampionshipProvider({ children }: { children: ReactNode }) {
     const { user, token } = useAuth();
+
+    // Initialize from localStorage if available
     const [currentChampionship, setCurrentChampionshipState] = useState<ChampionshipWithRole | null>(() => {
         const stored = localStorage.getItem('current_championship');
         return stored ? JSON.parse(stored) : null;
     });
+
     const [championships, setChampionships] = useState<ChampionshipWithRole[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     const setCurrentChampionship = (championship: ChampionshipWithRole | null) => {
         setCurrentChampionshipState(championship);
@@ -31,46 +35,51 @@ export function ChampionshipProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const refreshChampionships = async () => {
+    const refreshChampionships = useCallback(async () => {
         if (!user || !token) {
             setChampionships([]);
-            setCurrentChampionship(null);
+            setLoading(false);
             return;
         }
 
-        setLoading(true);
         try {
-            const response = await fetch('/api/championships', {
+            const data = await fetch('/api/championships', {
                 headers: {
                     'Authorization': `Bearer ${token}`,
                 },
-            });
+            }).then(res => res.json());
 
-            if (response.ok) {
-                const data = await response.json();
-                setChampionships(data);
-
-                // If no current championship or it's not in the list, select the first one
-                if (!currentChampionship || !data.find((c: ChampionshipWithRole) => c.id === currentChampionship.id)) {
-                    if (data.length > 0) {
-                        setCurrentChampionship(data[0]);
-                    } else {
-                        setCurrentChampionship(null);
-                    }
-                }
-            }
+            setChampionships(data);
         } catch (error) {
-            console.error('Error fetching championships:', error);
+            console.error('Failed to fetch championships:', error);
         } finally {
             setLoading(false);
         }
-    };
+    }, [user, token]);
 
     useEffect(() => {
         refreshChampionships();
-    }, [user, token]);
+    }, [refreshChampionships]);
+
+    // Re-sync from localStorage if context is null but localStorage has data
+    // This handles race condition when navigate() happens right after localStorage.setItem()
+    useEffect(() => {
+        if (!currentChampionship) {
+            const stored = localStorage.getItem('current_championship');
+            if (stored) {
+                try {
+                    const parsed = JSON.parse(stored);
+                    setCurrentChampionshipState(parsed);
+                } catch (e) {
+                    console.error('Failed to parse stored championship:', e);
+                }
+            }
+        }
+    }, [currentChampionship]);
 
     const isAdmin = currentChampionship?.role === 'admin';
+    // Handle both number (1) and boolean (true) from database/API  
+    const isSingleTournament = Boolean(currentChampionship?.is_single_tournament);
 
     return (
         <ChampionshipContext.Provider value={{
@@ -78,6 +87,7 @@ export function ChampionshipProvider({ children }: { children: ReactNode }) {
             championships,
             loading,
             isAdmin,
+            isSingleTournament,
             setCurrentChampionship,
             refreshChampionships
         }}>

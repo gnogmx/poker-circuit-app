@@ -7,7 +7,8 @@ import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Play, Pause, ChevronUp, ChevronDown, X, Coffee, Users, Trophy, CheckCircle } from 'lucide-react';
+import { Play, Pause, ChevronUp, ChevronDown, CheckCircle, Trophy, Users, X, Coffee } from 'lucide-react';
+import ConfirmationModal from '@/react-app/components/ConfirmationModal';
 
 interface GamePlayer {
   id: number;
@@ -36,7 +37,7 @@ interface ActiveRound {
 export default function LiveGame() {
   const navigate = useNavigate();
   const { data: activeRound, refresh: refreshRound } = useApi<ActiveRound | null>('/api/rounds/active');
-  const { isAdmin } = useChampionship();
+  const { isAdmin, isSingleTournament, currentChampionship } = useChampionship();
   const { data: settings, loading: loadingSettings } = useApi<TournamentSettings>('/api/tournament-settings');
   const { data: prizePool } = useApi<{ final_table_pot: number }>('/api/championships/prize-pool');
 
@@ -63,13 +64,28 @@ export default function LiveGame() {
     finalTableAmount: number;
     totalEntries: number;
     buyInValue: number;
-    first: { name: string; amount: number; id: number };
-    second: { name: string; amount: number; id: number };
-    third: { name: string; amount: number; id: number };
-    fourth?: { name: string; amount: number; id: number };
-    fifth?: { name: string; amount: number; id: number };
+    prizes: Array<{
+      id: number;
+      name: string;
+      amount: number;
+      position: number;
+    }>;
     isFinalTable?: boolean;
+    // Legacy properties removed
   } | null>(null);
+
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => { },
+  });
 
   const intervalRef = useRef<number | null>(null);
   const warningAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -100,7 +116,7 @@ export default function LiveGame() {
 
   const playLevelUpJingle = () => {
     try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioContext = new (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       const gainNode = audioContext.createGain();
       gainNode.connect(audioContext.destination);
 
@@ -475,14 +491,36 @@ export default function LiveGame() {
     // Skip confirmations if auto-completing
     if (!autoComplete) {
       if (activePlayersNow.length > 1) {
-        if (!confirm(`Ainda há ${activePlayersNow.length} jogadores ativos. Deseja finalizar mesmo assim?`)) {
-          return;
-        }
-      }
-
-      if (!confirm('Tem certeza que deseja finalizar esta rodada? As posições serão salvas e não poderão ser alteradas.')) {
+        setConfirmModal({
+          isOpen: true,
+          title: 'Jogadores Ativos',
+          message: `Ainda há ${activePlayersNow.length} jogadores ativos. Deseja finalizar mesmo assim?`,
+          variant: 'warning',
+          onConfirm: () => {
+            setConfirmModal({
+              isOpen: true,
+              title: 'Finalizar Rodada',
+              message: 'Tem certeza que deseja finalizar esta rodada? As posições serão salvas e não poderão ser alteradas.',
+              onConfirm: () => {
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                confirmAndCompleteRound([]);
+              }
+            });
+          }
+        });
         return;
       }
+
+      setConfirmModal({
+        isOpen: true,
+        title: 'Finalizar Rodada',
+        message: 'Tem certeza que deseja finalizar esta rodada? As posições serão salvas e não poderão ser alteradas.',
+        onConfirm: () => {
+          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+          confirmAndCompleteRound([]);
+        }
+      });
+      return;
     }
 
     try {
@@ -511,38 +549,28 @@ export default function LiveGame() {
         const fifthPlace = gamePlayers.find(p => p.position === 5);
 
         if (firstPlace && secondPlace && thirdPlace) {
+          const prizes = [
+            { id: firstPlace.id, name: firstPlace.name, amount: Math.round(netPrizePool * (p1 / 100)), position: 1 },
+            { id: secondPlace.id, name: secondPlace.name, amount: Math.round(netPrizePool * (p2 / 100)), position: 2 },
+            { id: thirdPlace.id, name: thirdPlace.name, amount: Math.round(netPrizePool * (p3 / 100)), position: 3 }
+          ];
+
+          if (fourthPlace) {
+            prizes.push({ id: fourthPlace.id, name: fourthPlace.name, amount: Math.round(netPrizePool * (p4 / 100)), position: 4 });
+          }
+
+          if (fifthPlace) {
+            prizes.push({ id: fifthPlace.id, name: fifthPlace.name, amount: Math.round(netPrizePool * (p5 / 100)), position: 5 });
+          }
+
           setPrizeDistribution({
-            total: netPrizePool,
-            grossTotal: netPrizePool,
+            total: Math.round(netPrizePool),
+            grossTotal: Math.round(netPrizePool),
             finalTableAmount: 0, // Already deducted
             totalEntries: gamePlayers.length,
             buyInValue: 0,
             isFinalTable: true,
-            first: {
-              name: firstPlace.name,
-              amount: netPrizePool * (p1 / 100),
-              id: firstPlace.id
-            },
-            second: {
-              name: secondPlace.name,
-              amount: netPrizePool * (p2 / 100),
-              id: secondPlace.id
-            },
-            third: {
-              name: thirdPlace.name,
-              amount: netPrizePool * (p3 / 100),
-              id: thirdPlace.id
-            },
-            fourth: fourthPlace ? {
-              name: fourthPlace.name,
-              amount: netPrizePool * (p4 / 100),
-              id: fourthPlace.id
-            } : undefined,
-            fifth: fifthPlace ? {
-              name: fifthPlace.name,
-              amount: netPrizePool * (p5 / 100),
-              id: fifthPlace.id
-            } : undefined
+            prizes: prizes
           });
           setShowPrizeModal(true);
         } else {
@@ -565,44 +593,67 @@ export default function LiveGame() {
         const grossPrizePool = (totalPlayers * buyInValue) + (totalRebuys * rebuyValue);
 
         let finalTableAmount = 0;
-        if (finalTableFixedValue > 0) {
-          finalTableAmount = finalTableFixedValue * totalEntries;
+        if (isSingleTournament) {
+          finalTableAmount = 0;
+        } else if (finalTableFixedValue > 0) {
+          const isFreezeout = activeRound.round_type === 'freezeout';
+          const multiplier = isFreezeout ? 2 : 1;
+          finalTableAmount = (finalTableFixedValue * multiplier) * totalEntries;
         } else {
           finalTableAmount = grossPrizePool * (finalTablePercentage / 100);
         }
 
-        netPrizePool = Math.max(0, grossPrizePool - finalTableAmount);
+        netPrizePool = Math.round(Math.max(0, grossPrizePool - finalTableAmount));
 
-        const firstPlacePercentage = settings.first_place_percentage || 60;
-        const secondPlacePercentage = settings.second_place_percentage || 30;
-        const thirdPlacePercentage = settings.third_place_percentage || 10;
+        // Parse prize distribution
+        let distributionPercentages: number[] = [];
+        if (settings.prize_distribution) {
+          if (Array.isArray(settings.prize_distribution)) {
+            distributionPercentages = settings.prize_distribution;
+          } else if (typeof settings.prize_distribution === 'string') {
+            try {
+              distributionPercentages = JSON.parse(settings.prize_distribution);
+            } catch {
+              distributionPercentages = [60, 30, 10]; // Default
+            }
+          }
+        }
 
-        const firstPlace = gamePlayers.find(p => p.position === 1);
-        const secondPlace = gamePlayers.find(p => p.position === 2);
-        const thirdPlace = gamePlayers.find(p => p.position === 3);
+        // Fallback to defaults keys if array is empty (legacy support)
+        if (distributionPercentages.length === 0) {
+          const p1 = settings.first_place_percentage || 60;
+          const p2 = settings.second_place_percentage || 30;
+          const p3 = settings.third_place_percentage || 10;
+          const p4 = settings.fourth_place_percentage || 0;
+          const p5 = settings.fifth_place_percentage || 0;
+          distributionPercentages = [p1, p2, p3, p4, p5].filter(p => p > 0);
+          if (distributionPercentages.length === 0) distributionPercentages = [60, 30, 10];
+        }
 
-        if (firstPlace && secondPlace && thirdPlace) {
+        const calculatedPrizes: { id: number; name: string; amount: number; position: number }[] = [];
+
+        // Map percentages to players by position
+        distributionPercentages.forEach((percentage, index) => {
+          const position = index + 1;
+          const player = gamePlayers.find(p => p.position === position);
+          if (player && percentage > 0) {
+            calculatedPrizes.push({
+              id: player.id,
+              name: player.name,
+              amount: Math.round(netPrizePool * (percentage / 100)),
+              position: position
+            });
+          }
+        });
+
+        if (calculatedPrizes.length > 0) {
           setPrizeDistribution({
-            total: netPrizePool,
-            grossTotal: grossPrizePool,
-            finalTableAmount: finalTableAmount,
+            total: Math.round(netPrizePool),
+            grossTotal: Math.round(grossPrizePool),
+            finalTableAmount: Math.round(finalTableAmount),
             totalEntries: totalEntries,
             buyInValue: buyInValue,
-            first: {
-              name: firstPlace.name,
-              amount: netPrizePool * (firstPlacePercentage / 100),
-              id: firstPlace.id
-            },
-            second: {
-              name: secondPlace.name,
-              amount: netPrizePool * (secondPlacePercentage / 100),
-              id: secondPlace.id
-            },
-            third: {
-              name: thirdPlace.name,
-              amount: netPrizePool * (thirdPlacePercentage / 100),
-              id: thirdPlace.id
-            },
+            prizes: calculatedPrizes,
           });
           setShowPrizeModal(true);
         } else {
@@ -770,6 +821,47 @@ export default function LiveGame() {
                 <CheckCircle className="w-4 h-4" />
                 <span>Finalizar Rodada</span>
               </Button>
+
+              {/* Finish and Exit button - Only for single tournaments */}
+              {isSingleTournament && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setConfirmModal({
+                      isOpen: true,
+                      title: 'Finalizar Torneio',
+                      message: 'Finalizar jogo único e voltar ao menu principal?',
+                      onConfirm: async () => {
+                        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                        try {
+                          // Get current championship ID from context
+                          const championshipId = currentChampionship?.id;
+
+                          if (championshipId) {
+                            // Delete the single tournament championship
+                            await apiRequest(`/api/championships/${championshipId}`, {
+                              method: 'DELETE'
+                            });
+                          }
+
+                          // Clear current championship from context and redirect
+                          localStorage.removeItem('current_championship');
+                          navigate('/');
+                          window.location.reload(); // Force reload to clear context
+                        } catch (err) {
+                          console.error('Error finishing game:', err);
+                          alert('Erro ao finalizar jogo. Redirecionando...');
+                          navigate('/');
+                        }
+                      }
+                    });
+                  }}
+                  className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                >
+                  <X className="w-5 h-5" />
+                  <span>Finalizar e Sair</span>
+                </Button>
+              )}
             </div>
           )}
         </div>
@@ -839,74 +931,6 @@ export default function LiveGame() {
                       <ChevronUp className="w-5 h-5" />
                       <span>Próximo Nível</span>
                     </Button>
-                  </div>
-
-                  {/* Test Alerts Controls */}
-                  <div className="flex items-center justify-center space-x-2 text-sm">
-                    <span className="text-gray-500">Testar Alertas:</span>
-                    <button
-                      onClick={() => {
-                        playLevelUpJingle();
-                        setIsFlashing(true);
-                        setTimeout(() => {
-                          safeSpeak("Attention players, the blinds will raise in one minute");
-                        }, 4000);
-                        setTimeout(() => setIsFlashing(false), 4000);
-                      }}
-                      className="px-2 py-1 bg-yellow-500/20 text-yellow-500 rounded hover:bg-yellow-500/30 transition-colors"
-                    >
-                      1 Min
-                    </button>
-                    <button
-                      onClick={() => {
-                        playLevelUpJingle();
-                        setIsFlashing(true);
-                        setTimeout(() => {
-                          const currentLevelText = blindLevels[currentLevel];
-                          if (isBreakLevel(currentLevelText)) {
-                            safeSpeak("Attention players, we are now on a break");
-                          } else {
-                            const parts = currentLevelText.split('/');
-                            if (parts.length === 2) {
-                              const small = parts[0].trim();
-                              const big = parts[1].trim();
-                              safeSpeak(`Attention players, the blinds now have changed. Small blind is ${small} and big blind is ${big}`);
-                            } else {
-                              safeSpeak(`Attention players, the blinds now have changed to ${currentLevelText}`);
-                            }
-                          }
-                        }, 4000);
-                        setTimeout(() => {
-                          setIsFlashing(false);
-                        }, 4000);
-                      }}
-                      className="px-2 py-1 bg-green-500/20 text-green-500 rounded hover:bg-green-500/30 transition-colors"
-                    >
-                      Nível
-                    </button>
-                    <button
-                      onClick={() => {
-                        playLevelUpJingle();
-                        setIsFlashing(true);
-                        setTimeout(() => {
-                          safeSpeak("Attention players, we are now on a break");
-                        }, 4000);
-                        setTimeout(() => {
-                          setIsFlashing(false);
-                        }, 4000);
-                      }}
-                      className="px-2 py-1 bg-orange-500/20 text-orange-500 rounded hover:bg-orange-500/30 transition-colors"
-                    >
-                      Break
-                    </button>
-                    <button
-                      onClick={() => {
-                        safeSpeak("Testing voice. This is a direct call.");
-                      }}
-                      className="px-2 py-1 bg-blue-500/20 text-blue-500 rounded hover:bg-blue-500/30 transition-colors"
-                    >
-                      Voz
-                    </button>
                   </div>
                 </div>
               )}
@@ -993,7 +1017,11 @@ export default function LiveGame() {
                     className="flex items-center justify-between p-4 bg-white/5 rounded-lg border border-white/10"
                   >
                     <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${player.position === 1 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' :
+                        player.position === 2 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
+                          player.position === 3 ? 'bg-gradient-to-br from-orange-500 to-orange-600' :
+                            'bg-gradient-to-br from-blue-500 to-blue-600'
+                        }`}>
                         <span className="text-white font-bold text-lg">{player.position}º</span>
                       </div>
                       <div>
@@ -1005,18 +1033,40 @@ export default function LiveGame() {
                         )}
                         {player.knockout_earnings > 0 && (
                           <span className="text-green-400 text-xs block">
-                            Knockout: $ {player.knockout_earnings.toFixed(2)}
+                            Knockout: $ {player.knockout_earnings.toFixed(0)}
                           </span>
                         )}
                       </div>
                     </div>
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleRestorePlayer(player.id)}
-                      className="!px-3 !py-1"
-                    >
-                      Restaurar
-                    </Button>
+                    {/* Dynamic Prize List - Input shown only if prizes are distributed */}
+                    {prizeDistribution && prizeDistribution.prizes.length > 0 && (
+                      <Input
+                        type="number"
+                        step="1"
+                        value={Math.round(prizeDistribution.prizes.find(p => p.id === player.id)?.amount || 0)}
+                        onChange={(e) => {
+                          const newAmount = Math.round(parseFloat(e.target.value) || 0);
+                          const newPrizes = prizeDistribution.prizes.map(p =>
+                            p.id === player.id ? { ...p, amount: newAmount } : p
+                          );
+                          setPrizeDistribution({ ...prizeDistribution, prizes: newPrizes });
+                        }}
+                        className={`w-32 text-right font-bold bg-black/20 ${player.position === 1 ? 'text-yellow-400 border-yellow-500/30' :
+                          player.position === 2 ? 'text-gray-300 border-gray-400/30' :
+                            player.position === 3 ? 'text-orange-400 border-orange-500/30' :
+                              'text-blue-400 border-blue-600/30'
+                          }`}
+                      />
+                    )}
+                    {!prizeDistribution && (
+                      <Button
+                        variant="secondary"
+                        onClick={() => handleRestorePlayer(player.id)}
+                        className="!px-3 !py-1"
+                      >
+                        Restaurar
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1026,364 +1076,252 @@ export default function LiveGame() {
       </div>
 
       {/* Prize Distribution Modal */}
-      {showPrizeModal && prizeDistribution && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-          <Card className="max-w-2xl w-full my-8">
-            <CardHeader>
-              <div className="relative text-center">
-                <button
-                  onClick={() => {
-                    setShowPrizeModal(false);
-                    navigate('/rounds');
-                  }}
-                  className="absolute -top-2 -right-2 p-2 text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-full transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-                <h3 className="text-2xl font-bold text-white mb-2">
-                  {prizeDistribution.isFinalTable ? 'Premiação da Mesa Final' : 'Premiação da Rodada'}
-                </h3>
-                <p className="text-gray-400">Parabéns aos vencedores!</p>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="space-y-3">
-                <div className="text-center py-3 bg-white/5 rounded-lg border border-white/10">
-                  <div className="text-gray-400 text-xs mb-1">
-                    {prizeDistribution.isFinalTable ? 'Prêmio Acumulado' : 'Total Arrecadado'}
+      {
+        showPrizeModal && prizeDistribution && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+            <Card className="max-w-2xl w-full my-8">
+              <CardHeader>
+                <div className="relative text-center">
+                  <button
+                    onClick={() => {
+                      setShowPrizeModal(false);
+                      navigate('/rounds');
+                    }}
+                    className="absolute -top-2 -right-2 p-2 text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-full transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <h3 className="text-2xl font-bold text-white mb-2">
+                    {prizeDistribution.isFinalTable ? 'Premiação da Mesa Final' : 'Premiação da Rodada'}
+                  </h3>
+                  <p className="text-gray-400">Parabéns aos vencedores!</p>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="space-y-3">
+                  <div className="text-center py-3 bg-white/5 rounded-lg border border-white/10">
+                    <div className="text-gray-400 text-xs mb-1">
+                      {prizeDistribution.isFinalTable ? 'Prêmio Acumulado' : 'Total Arrecadado'}
+                    </div>
+                    <div className="text-2xl font-bold text-white">
+                      $ {Math.round(prizeDistribution.grossTotal)}
+                    </div>
+                    {!prizeDistribution.isFinalTable && (
+                      <div className="text-gray-400 text-xs mt-1">
+                        {prizeDistribution.totalEntries} entradas × $ {Math.round(prizeDistribution.buyInValue)}
+                      </div>
+                    )}
                   </div>
-                  <div className="text-2xl font-bold text-white">
-                    $ {prizeDistribution.grossTotal.toFixed(2)}
-                  </div>
+
+                  {/* Show Split for Regular Rounds */}
                   {!prizeDistribution.isFinalTable && (
-                    <div className="text-gray-400 text-xs mt-1">
-                      {prizeDistribution.totalEntries} entradas × $ {prizeDistribution.buyInValue.toFixed(2)}
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-gradient-to-br from-orange-500/20 to-red-500/20 rounded-lg p-3 border border-orange-500/30">
+                        <div className="text-orange-200 text-xs mb-1 uppercase tracking-wider">Mesa Final</div>
+                        <div className="text-xl font-bold text-orange-400">
+                          $ {Math.round(prizeDistribution.finalTableAmount || 0)}
+                        </div>
+                      </div>
+                      <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/20 rounded-lg p-3 border border-emerald-500/30">
+                        <div className="text-emerald-200 text-xs mb-1 uppercase tracking-wider">Premiação Rodada</div>
+                        <div className="text-xl font-bold text-emerald-400">
+                          $ {Math.round(prizeDistribution.total)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Show Prize Pool for Final Table */}
+                  {prizeDistribution.isFinalTable && (
+                    <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-lg p-4 border border-yellow-500/30 text-center">
+                      <div className="text-yellow-200 text-sm mb-1 uppercase tracking-wider">Prêmio Acumulado</div>
+                      <div className="text-3xl font-bold text-yellow-400">
+                        $ {prizePool?.final_table_pot?.toLocaleString('pt-BR', { minimumFractionDigits: 0 }) || '0'}
+                      </div>
                     </div>
                   )}
                 </div>
 
-                {/* Only show Rebuy/Add-on info if NOT final table */}
-                {!activeRound.is_final_table && (
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                      <div className="text-gray-400 text-xs mb-1">Buy-in</div>
-                      <div className="text-xl font-bold text-green-400">
-                        $ {activeRound.buy_in_value || settings?.default_buy_in || 600}
+                <div className="space-y-4">
+                  {prizeDistribution.prizes.map((prize, index) => (
+                    <div key={prize.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-gray-700/20 to-gray-800/20 rounded-lg border border-gray-600/30">
+                      <div className="flex items-center space-x-4">
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center ${prize.position === 1 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' :
+                          prize.position === 2 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
+                            prize.position === 3 ? 'bg-gradient-to-br from-orange-500 to-orange-600' :
+                              'bg-gradient-to-br from-blue-500 to-blue-600'
+                          }`}>
+                          <span className="text-white font-bold text-lg">{prize.position}º</span>
+                        </div>
+                        <div>
+                          <div className="text-white font-semibold">{prize.name}</div>
+                          <div className="text-gray-400 text-sm">
+                            {prize.position === 1 ? 'Campeão' :
+                              prize.position === 2 ? 'Vice-Campeão' :
+                                `${prize.position}º Lugar`}
+                          </div>
+                        </div>
                       </div>
+                      <Input
+                        type="number"
+                        step="1"
+                        value={Math.round(prize.amount)}
+                        onChange={(e) => {
+                          const newAmount = Math.round(parseFloat(e.target.value) || 0);
+                          const newPrizes = [...prizeDistribution.prizes];
+                          newPrizes[index] = { ...newPrizes[index], amount: newAmount };
+                          setPrizeDistribution({ ...prizeDistribution, prizes: newPrizes });
+                        }}
+                        className={`w-32 text-right font-bold bg-black/20 ${prize.position === 1 ? 'text-yellow-400 border-yellow-500/30' :
+                          prize.position === 2 ? 'text-gray-300 border-gray-400/30' :
+                            prize.position === 3 ? 'text-orange-400 border-orange-500/30' :
+                              'text-blue-400 border-blue-600/30'
+                          }`}
+                      />
                     </div>
-                    <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                      <div className="text-gray-400 text-xs mb-1">Recompra</div>
-                      <div className="text-xl font-bold text-blue-400">
-                        $ {activeRound.rebuy_value || settings?.default_buy_in || 600}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Show Prize Pool for Final Table */}
-                {activeRound.is_final_table && (
-                  <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-lg p-4 border border-yellow-500/30 text-center">
-                    <div className="text-yellow-200 text-sm mb-1 uppercase tracking-wider">Prêmio Acumulado</div>
-                    <div className="text-3xl font-bold text-yellow-400">
-                      $ {prizePool?.final_table_pot?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-gradient-to-r from-yellow-500/20 to-amber-500/20 rounded-lg border border-yellow-500/30">
-                  <div className="flex items-center space-x-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-400 to-amber-500 flex items-center justify-center">
-                      <span className="text-white font-bold text-lg">1º</span>
-                    </div>
-                    <div>
-                      <div className="text-white font-semibold">{prizeDistribution.first.name}</div>
-                      <div className="text-yellow-300 text-sm">Campeão</div>
-                    </div>
-                  </div>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={prizeDistribution.first.amount}
-                    onChange={(e) => setPrizeDistribution({
-                      ...prizeDistribution,
-                      first: { ...prizeDistribution.first, amount: parseFloat(e.target.value) || 0 }
-                    })}
-                    className="w-32 text-right font-bold text-yellow-400 bg-black/20 border-yellow-500/30"
-                  />
+                  ))}
                 </div>
 
-                <div className="flex items-center justify-between p-4 bg-gradient-to-r from-gray-400/20 to-gray-500/20 rounded-lg border border-gray-400/30">
-                  <div className="flex items-center space-x-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-gray-300 to-gray-400 flex items-center justify-center">
-                      <span className="text-white font-bold text-lg">2º</span>
-                    </div>
-                    <div>
-                      <div className="text-white font-semibold">{prizeDistribution.second.name}</div>
-                      <div className="text-gray-300 text-sm">Vice-Campeão</div>
-                    </div>
-                  </div>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={prizeDistribution.second.amount}
-                    onChange={(e) => setPrizeDistribution({
-                      ...prizeDistribution,
-                      second: { ...prizeDistribution.second, amount: parseFloat(e.target.value) || 0 }
-                    })}
-                    className="w-32 text-right font-bold text-gray-300 bg-black/20 border-gray-400/30"
-                  />
-                </div>
-
-                <div className="flex items-center justify-between p-4 bg-gradient-to-r from-orange-600/20 to-orange-700/20 rounded-lg border border-orange-600/30">
-                  <div className="flex items-center space-x-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
-                      <span className="text-white font-bold text-lg">3º</span>
-                    </div>
-                    <div>
-                      <div className="text-white font-semibold">{prizeDistribution.third.name}</div>
-                      <div className="text-orange-300 text-sm">Terceiro Lugar</div>
-                    </div>
-                  </div>
-                  <Input
-                    type="number"
-                    step="1"
-                    value={prizeDistribution.third.amount}
-                    onChange={(e) => setPrizeDistribution({
-                      ...prizeDistribution,
-                      third: { ...prizeDistribution.third, amount: parseFloat(e.target.value) || 0 }
-                    })}
-                    className="w-32 text-right font-bold text-orange-400 bg-black/20 border-orange-600/30"
-                  />
-                </div>
-
-                {/* 4th Place - Only show if Final Table and exists */}
-                {prizeDistribution.isFinalTable && prizeDistribution.fourth && (
-                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-blue-600/20 to-blue-700/20 rounded-lg border border-blue-600/30">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
-                        <span className="text-white font-bold text-lg">4º</span>
-                      </div>
-                      <div>
-                        <div className="text-white font-semibold">{prizeDistribution.fourth.name}</div>
-                        <div className="text-blue-300 text-sm">Quarto Lugar</div>
-                      </div>
-                    </div>
-                    <Input
-                      type="number"
-                      step="1"
-                      value={prizeDistribution.fourth.amount}
-                      onChange={(e) => setPrizeDistribution({
-                        ...prizeDistribution,
-                        fourth: { ...prizeDistribution.fourth!, amount: parseFloat(e.target.value) || 0 }
-                      })}
-                      className="w-32 text-right font-bold text-blue-400 bg-black/20 border-blue-600/30"
-                    />
-                  </div>
-                )}
-
-                {/* 5th Place - Only show if Final Table and exists */}
-                {prizeDistribution.isFinalTable && prizeDistribution.fifth && (
-                  <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-600/20 to-purple-700/20 rounded-lg border border-purple-600/30">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
-                        <span className="text-white font-bold text-lg">5º</span>
-                      </div>
-                      <div>
-                        <div className="text-white font-semibold">{prizeDistribution.fifth.name}</div>
-                        <div className="text-purple-300 text-sm">Quinto Lugar</div>
-                      </div>
-                    </div>
-                    <Input
-                      type="number"
-                      step="1"
-                      value={prizeDistribution.fifth.amount}
-                      onChange={(e) => setPrizeDistribution({
-                        ...prizeDistribution,
-                        fifth: { ...prizeDistribution.fifth!, amount: parseFloat(e.target.value) || 0 }
-                      })}
-                      className="w-32 text-right font-bold text-purple-400 bg-black/20 border-purple-600/30"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Prize Total Validation */}
-              <div className={`p-4 rounded-lg border ${(() => {
-                const totalPrizes = prizeDistribution.first.amount +
-                  prizeDistribution.second.amount +
-                  prizeDistribution.third.amount +
-                  (prizeDistribution.fourth?.amount || 0) +
-                  (prizeDistribution.fifth?.amount || 0);
-                return Math.abs(totalPrizes - prizeDistribution.total) < 0.01
+                {/* Prize Total Validation */}
+                <div className={`p-4 rounded-lg border ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) < 0.01
                   ? 'bg-green-500/10 border-green-500/30'
-                  : 'bg-red-500/10 border-red-500/30';
-              })()}`}>
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-300 font-medium">Soma dos Prêmios:</span>
-                  <span className={`font-bold text-xl ${(() => {
-                    const totalPrizes = prizeDistribution.first.amount +
-                      prizeDistribution.second.amount +
-                      prizeDistribution.third.amount +
-                      (prizeDistribution.fourth?.amount || 0) +
-                      (prizeDistribution.fifth?.amount || 0);
-                    return Math.abs(totalPrizes - prizeDistribution.total) < 0.01
+                  : 'bg-red-500/10 border-red-500/30'
+                  }`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-300 font-medium">Soma dos Prêmios:</span>
+                    <span className={`font-bold text-xl ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) < 1
                       ? 'text-green-400'
-                      : 'text-red-400';
-                  })()}`}>
-                    $ {(() => {
-                      const totalPrizes = prizeDistribution.first.amount +
-                        prizeDistribution.second.amount +
-                        prizeDistribution.third.amount +
-                        (prizeDistribution.fourth?.amount || 0) +
-                        (prizeDistribution.fifth?.amount || 0);
-                      return totalPrizes.toFixed(2);
-                    })()}
-                  </span>
+                      : 'text-red-400'
+                      }`}>
+                      $ {prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mt-2">
+                    <span className="text-gray-400 text-sm">Total Disponível:</span>
+                    <span className="text-gray-300 font-semibold">$ {Math.round(prizeDistribution.total)}</span>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-gray-400 text-sm">Total Disponível:</span>
-                  <span className="text-gray-300 font-semibold">$ {prizeDistribution.total.toFixed(2)}</span>
-                </div>
-                {(() => {
-                  const totalPrizes = prizeDistribution.first.amount +
-                    prizeDistribution.second.amount +
-                    prizeDistribution.third.amount +
-                    (prizeDistribution.fourth?.amount || 0) +
-                    (prizeDistribution.fifth?.amount || 0);
-                  return Math.abs(totalPrizes - prizeDistribution.total) >= 0.01 && (
-                    <div className="mt-2 text-red-400 text-sm text-center">
-                      ⚠️ A soma dos prêmios deve ser igual ao total disponível!
-                    </div>
-                  );
-                })()}
-              </div>
 
-              <div className="pt-4">
-                <Button
-                  onClick={() => {
-                    const prizes = [
-                      { playerId: prizeDistribution.first.id, amount: prizeDistribution.first.amount },
-                      { playerId: prizeDistribution.second.id, amount: prizeDistribution.second.amount },
-                      { playerId: prizeDistribution.third.id, amount: prizeDistribution.third.amount },
-                    ];
-                    if (prizeDistribution.fourth) {
-                      prizes.push({ playerId: prizeDistribution.fourth.id, amount: prizeDistribution.fourth.amount });
-                    }
-                    if (prizeDistribution.fifth) {
-                      prizes.push({ playerId: prizeDistribution.fifth.id, amount: prizeDistribution.fifth.amount });
-                    }
-                    confirmAndCompleteRound(prizes);
-                  }}
-                  className="w-full"
-                  loading={completing}
-                  disabled={(() => {
-                    const totalPrizes = prizeDistribution.first.amount +
-                      prizeDistribution.second.amount +
-                      prizeDistribution.third.amount +
-                      (prizeDistribution.fourth?.amount || 0) +
-                      (prizeDistribution.fifth?.amount || 0);
-                    return Math.abs(totalPrizes - prizeDistribution.total) >= 0.01;
-                  })()}
-                >
-                  Confirmar e Finalizar
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+                <div className="pt-4">
+                  <Button
+                    onClick={() => {
+                      const prizes = prizeDistribution.prizes.map(p => ({
+                        playerId: p.id,
+                        amount: p.amount
+                      }));
+                      confirmAndCompleteRound(prizes);
+                    }}
+                    className="w-full"
+                    loading={completing}
+                    disabled={Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) >= 1}
+                  >
+                    Confirmar e Finalizar
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+      }
 
       {/* Eliminate Dialog */}
-      {showEliminateDialog && playerToEliminate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <Card className="max-w-md w-full">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-semibold text-white">Jogador Eliminado</h3>
-                <button
-                  onClick={() => setShowEliminateDialog(false)}
-                  className="text-gray-400 hover:text-white"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="text-center py-4">
-                <div className="text-gray-300 mb-2">Jogador:</div>
-                <div className="text-2xl font-bold text-white mb-4">{playerToEliminate.name}</div>
-                {playerToEliminate.rebuys > 0 && (
-                  <div className="text-sm text-gray-400 mb-2">
-                    Recompras até agora: {playerToEliminate.rebuys}
-                  </div>
-                )}
-                <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
-                  <span className="text-white font-bold text-3xl">{nextPosition}º</span>
+      {
+        showEliminateDialog && playerToEliminate && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <Card className="max-w-md w-full">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-semibold text-white">Jogador Eliminado</h3>
+                  <button
+                    onClick={() => setShowEliminateDialog(false)}
+                    className="text-gray-400 hover:text-white"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
-              </div>
-
-              {activeRound.round_type === 'knockout' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Eliminado por
-                    </label>
-                    <select
-                      value={eliminatorId}
-                      onChange={(e) => setEliminatorId(e.target.value)}
-                      className="w-full bg-slate-900/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                    >
-                      <option value="">Selecione o jogador...</option>
-                      {activePlayers
-                        .filter(p => p.id !== playerToEliminate.id)
-                        .map(p => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))
-                      }
-                    </select>
-                  </div>
-
-                  {eliminatorId && (
-                    <Input
-                      label="Valor do Bounty ($)"
-                      type="number"
-                      step="1"
-                      min="0"
-                      value={eliminationKnockout}
-                      onChange={(e) => setEliminationKnockout(Math.max(0, parseFloat(e.target.value) || 0))}
-                      placeholder="0.00"
-                      disabled={true}
-                    />
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="text-center py-4">
+                  <div className="text-gray-300 mb-2">Jogador:</div>
+                  <div className="text-2xl font-bold text-white mb-4">{playerToEliminate.name}</div>
+                  {playerToEliminate.rebuys > 0 && (
+                    <div className="text-sm text-gray-400 mb-2">
+                      Recompras até agora: {playerToEliminate.rebuys}
+                    </div>
                   )}
+                  <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
+                    <span className="text-white font-bold text-3xl">{nextPosition}º</span>
+                  </div>
                 </div>
-              )}
 
-              <div className="space-y-3 pt-4">
-                {canRebuy && playerToEliminate.rebuys < maxRebuys && (
-                  <Button onClick={handleRebuy} className="w-full" variant="secondary">
-                    Fazer Recompra e Continuar
-                  </Button>
+                {activeRound.round_type === 'knockout' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">
+                        Eliminado por
+                      </label>
+                      <select
+                        value={eliminatorId}
+                        onChange={(e) => setEliminatorId(e.target.value)}
+                        className="w-full bg-slate-900/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      >
+                        <option value="">Selecione o jogador...</option>
+                        {activePlayers
+                          .filter(p => p.id !== playerToEliminate.id)
+                          .map(p => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))
+                        }
+                      </select>
+                    </div>
+
+                    {eliminatorId && (
+                      <Input
+                        label="Valor do Bounty ($)"
+                        type="number"
+                        step="1"
+                        min="0"
+                        value={eliminationKnockout}
+                        onChange={(e) => setEliminationKnockout(Math.max(0, parseFloat(e.target.value) || 0))}
+                        placeholder="0.00"
+                        disabled={true}
+                      />
+                    )}
+                  </div>
                 )}
-                <Button onClick={handleConfirmEliminate} className="w-full">
-                  Confirmar Eliminação
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() => setShowEliminateDialog(false)}
-                  className="w-full"
-                >
-                  Cancelar
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )
+
+                <div className="space-y-3 pt-4">
+                  {canRebuy && playerToEliminate.rebuys < maxRebuys && (
+                    <Button onClick={handleRebuy} className="w-full" variant="secondary">
+                      Fazer Recompra e Continuar
+                    </Button>
+                  )}
+                  <Button onClick={handleConfirmEliminate} className="w-full">
+                    Confirmar Eliminação
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowEliminateDialog(false)}
+                    className="w-full"
+                  >
+                    Cancelar
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
       }
-    </Layout >
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+      />
+    </Layout>
   );
 }

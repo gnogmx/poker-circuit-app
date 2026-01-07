@@ -22,6 +22,8 @@ export default function Login() {
         const success = await login(email, password);
 
         if (success) {
+            // Clear any previous championship selection
+            localStorage.removeItem('current_championship');
             navigate('/');
         } else {
             setError('Email ou senha incorretos');

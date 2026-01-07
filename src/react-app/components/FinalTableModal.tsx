@@ -34,7 +34,7 @@ export default function FinalTableModal({
                         <div>
                             <h2 className="text-3xl font-bold text-white">Mesa Final</h2>
                             <p className="text-green-400 font-semibold text-lg">
-                                Prêmio Acumulado: $ {prizePool.toFixed(2)}
+                                Prêmio Acumulado: $ {prizePool.toFixed(0)}
                             </p>
                         </div>
                     </div>
@@ -94,7 +94,7 @@ export default function FinalTableModal({
                                             {player.rounds_played}
                                         </td>
                                         <td className="px-6 py-4 text-center">
-                                            <span className="text-green-400 font-medium">$ {(player.total_prize || 0).toFixed(2)}</span>
+                                            <span className="text-green-400 font-medium">$ {(player.total_prize || 0).toFixed(0)}</span>
                                         </td>
                                     </tr>
                                 );

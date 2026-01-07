@@ -23,7 +23,8 @@ export default function Register() {
         const success = await register(email, password, name);
 
         if (success) {
-            navigate('/');
+            // Redirect to welcome screen for first-time users
+            navigate('/welcome');
         } else {
             setError('Erro ao criar conta. Email pode já estar cadastrado.');
         }

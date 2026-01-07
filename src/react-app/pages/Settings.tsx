@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router';
 import PlayersList from '@/react-app/components/PlayersList';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
 import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
@@ -7,14 +8,24 @@ import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Save, Plus, Loader2, Clock, Coins, Coffee, Trophy, DollarSign, Users, RotateCcw } from 'lucide-react';
+import { Save, Plus, Loader2, Clock, Coins, Coffee, Trophy, DollarSign, Users, RotateCcw, Copy, X } from 'lucide-react';
+
+import ConfirmationModal from '@/react-app/components/ConfirmationModal';
 
 export default function Settings() {
+  const navigate = useNavigate();
   const { data: rules, loading: loadingRules, error: rulesError, refresh: refreshRules } = useApi<ScoringRule[]>('/api/scoring-rules');
   const { data: tournamentSettings, loading: loadingSettings, error: settingsError, refresh: refreshSettings } = useApi<TournamentSettings>('/api/tournament-settings');
   const { data: schedules, refresh: refreshSchedules } = useApi<RoundSchedule[]>('/api/schedules');
-  const { data: rounds } = useApi<any[]>('/api/rounds');
-  const { isAdmin } = useChampionship();
+  const { data: rounds } = useApi<{ id: number; status: string; is_final_table?: boolean }[]>('/api/rounds');
+  const { isAdmin, isSingleTournament, currentChampionship } = useChampionship();
+
+  // Redirect if single tournament - settings not available
+  useEffect(() => {
+    if (isSingleTournament) {
+      navigate('/live');
+    }
+  }, [isSingleTournament, navigate]);
 
   const [editingRules, setEditingRules] = useState<{ position: number; points: number }[]>([]);
   const [hasRulesChanges, setHasRulesChanges] = useState(false);
@@ -27,9 +38,7 @@ export default function Settings() {
   const [finalTableFixedValue, setFinalTableFixedValue] = useState<number>(0);
   const [finalTableType, setFinalTableType] = useState<'percentage' | 'fixed'>('percentage');
   const [totalRounds, setTotalRounds] = useState<number>(24);
-  const [firstPlacePercentage, setFirstPlacePercentage] = useState<number>(60);
-  const [secondPlacePercentage, setSecondPlacePercentage] = useState<number>(30);
-  const [thirdPlacePercentage, setThirdPlacePercentage] = useState<number>(10);
+  const [prizeDistribution, setPrizeDistribution] = useState<number[]>([]);
   const [finalTableTopPlayers, setFinalTableTopPlayers] = useState<number>(9);
   const [finalTable1stPercentage, setFinalTable1stPercentage] = useState<number>(40);
   const [finalTable2ndPercentage, setFinalTable2ndPercentage] = useState<number>(25);
@@ -60,9 +69,32 @@ export default function Settings() {
       setFinalTableFixedValue(tournamentSettings.final_table_fixed_value || 0);
       setFinalTableType(tournamentSettings.final_table_fixed_value && tournamentSettings.final_table_fixed_value > 0 ? 'fixed' : 'percentage');
       setTotalRounds(tournamentSettings.total_rounds || 24);
-      setFirstPlacePercentage(tournamentSettings.first_place_percentage || 60);
-      setSecondPlacePercentage(tournamentSettings.second_place_percentage || 30);
-      setThirdPlacePercentage(tournamentSettings.third_place_percentage || 10);
+
+      // Load prize distribution
+      if (tournamentSettings.prize_distribution) {
+        if (Array.isArray(tournamentSettings.prize_distribution)) {
+          setPrizeDistribution(tournamentSettings.prize_distribution);
+        } else if (typeof tournamentSettings.prize_distribution === 'string') {
+          try {
+            setPrizeDistribution(JSON.parse(tournamentSettings.prize_distribution));
+          } catch {
+            setPrizeDistribution([]);
+          }
+        }
+      } else {
+        // Fallback to individual columns if no JSON
+        const p1 = tournamentSettings.first_place_percentage || 0;
+        const p2 = tournamentSettings.second_place_percentage || 0;
+        const p3 = tournamentSettings.third_place_percentage || 0;
+        const p4 = tournamentSettings.fourth_place_percentage || 0;
+        const p5 = tournamentSettings.fifth_place_percentage || 0;
+        if (p1 + p2 + p3 + p4 + p5 > 0) {
+          setPrizeDistribution([p1, p2, p3, p4, p5].filter(p => p > 0));
+        } else {
+          setPrizeDistribution([60, 30, 10]);
+        }
+      }
+
       setFinalTableTopPlayers(tournamentSettings.final_table_top_players || 9);
       setFinalTable1stPercentage(tournamentSettings.final_table_1st_percentage || 40);
       setFinalTable2ndPercentage(tournamentSettings.final_table_2nd_percentage || 25);
@@ -139,9 +171,7 @@ export default function Settings() {
           final_table_percentage: finalTableType === 'percentage' ? finalTablePercentage : 0,
           final_table_fixed_value: finalTableType === 'fixed' ? finalTableFixedValue : 0,
           total_rounds: totalRounds,
-          first_place_percentage: firstPlacePercentage,
-          second_place_percentage: secondPlacePercentage,
-          third_place_percentage: thirdPlacePercentage,
+          prize_distribution: prizeDistribution,
           final_table_top_players: finalTableTopPlayers,
           final_table_1st_percentage: finalTable1stPercentage,
           final_table_2nd_percentage: finalTable2ndPercentage,
@@ -172,6 +202,15 @@ export default function Settings() {
     const datePattern = /^\d{1,2}\/\d{1,2}$/;
     if (!datePattern.test(scheduleDate)) {
       alert('Formato de data inválido. Use: dia/mês (ex: 15/12)');
+      return;
+    }
+
+    // Check if we've reached the maximum number of schedules (total_rounds + 1 for final table)
+    const maxSchedules = totalRounds + 1;
+    const currentScheduleCount = schedules?.length || 0;
+
+    if (currentScheduleCount >= maxSchedules) {
+      alert(`Limite de agendamentos atingido! Máximo: ${totalRounds} rodadas regulares + 1 mesa final = ${maxSchedules} total.`);
       return;
     }
 
@@ -224,38 +263,63 @@ export default function Settings() {
   };
 
   const handleDeleteSchedule = async (id: number) => {
-    if (!confirm('Tem certeza que deseja remover esta data?')) {
-      return;
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Remover Data',
+      message: 'Tem certeza que deseja remover esta data?',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        try {
+          await apiRequest(`/api/schedules/${id}`, {
+            method: 'DELETE',
+          });
+          refreshSchedules();
+        } catch (err) {
+          console.error('Failed to delete schedule:', err);
+          alert('Erro ao remover data.');
+        }
+      }
+    });
+  };
 
-    try {
-      await apiRequest(`/api/schedules/${id}`, {
-        method: 'DELETE',
-      });
-      refreshSchedules();
-    } catch (err) {
-      console.error('Failed to delete schedule:', err);
-      alert('Erro ao remover data.');
-    }
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => { },
+  });
+
+  const handleGenerateFinalTableRequest = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'Gerar Mesa Final',
+      message: 'Tem certeza que deseja gerar a Mesa Final? Esta ação criará uma nova rodada com os jogadores classificados.',
+      onConfirm: handleGenerateFinalTable
+    });
   };
 
   const handleGenerateFinalTable = async () => {
-    if (!confirm('Tem certeza que deseja gerar a Mesa Final? Esta ação criará uma nova rodada com os jogadores classificados.')) {
-      return;
-    }
-
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
     try {
       const response = await apiRequest('/api/final-table/generate', {
         method: 'POST',
       });
+      // ... existing logic ...
+
 
       alert(`Mesa Final criada com sucesso! ${response.player_count} jogadores adicionados.`);
 
       // Redirect to rounds page
       window.location.href = '/rounds';
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to generate final table:', err);
-      const errorMsg = err?.response?.error || err?.message || 'Erro ao gerar mesa final. Verifique o console do navegador para mais detalhes.';
+      const errorMsg = (err instanceof Error && err.message) || 'Erro ao gerar mesa final. Verifique o console do navegador para mais detalhes.';
       alert(errorMsg);
     }
   };
@@ -271,6 +335,43 @@ export default function Settings() {
           <h2 className="text-3xl font-bold text-white">Configurações</h2>
           <p className="text-gray-400 mt-1">Configure o campeonato e as regras de pontuação</p>
         </div>
+
+        {/* Championship Code Card */}
+        {currentChampionship?.code && (
+          <Card className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border-blue-500/30">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <Users className="w-5 h-5 text-blue-400" />
+                    <h3 className="text-lg font-semibold text-white">Código de Acesso</h3>
+                  </div>
+                  <p className="text-gray-400 text-sm mb-3">
+                    Compartilhe este código com os jogadores para que possam participar
+                  </p>
+                  <div className="flex items-center space-x-3">
+                    <div className="flex-1 bg-black/30 rounded-lg px-4 py-3 border border-blue-500/30">
+                      <code className="text-2xl font-mono font-bold text-blue-300 tracking-widest">
+                        {currentChampionship.code}
+                      </code>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        navigator.clipboard.writeText(currentChampionship.code);
+                        alert('Código copiado!');
+                      }}
+                      className="bg-blue-500/20 hover:bg-blue-500/30 border-blue-500/50"
+                    >
+                      <Copy className="w-4 h-4" />
+                      <span>Copiar</span>
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -398,47 +499,77 @@ export default function Settings() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-3">
-                    Distribuição de Prêmios por Rodada (%)
-                  </label>
-                  <div className="grid grid-cols-3 gap-4">
-                    <Input
-                      label="1º Lugar"
-                      type="number"
-                      step="1"
-                      value={firstPlacePercentage || ''}
-                      onChange={(e) => {
-                        setFirstPlacePercentage(parseFloat(e.target.value) || 0);
-                        setHasSettingsChanges(true);
-                      }}
-                      disabled={!isAdmin}
-                    />
-                    <Input
-                      label="2º Lugar"
-                      type="number"
-                      step="1"
-                      value={secondPlacePercentage || ''}
-                      onChange={(e) => {
-                        setSecondPlacePercentage(parseFloat(e.target.value) || 0);
-                        setHasSettingsChanges(true);
-                      }}
-                      disabled={!isAdmin}
-                    />
-                    <Input
-                      label="3º Lugar"
-                      type="number"
-                      step="1"
-                      value={thirdPlacePercentage || ''}
-                      onChange={(e) => {
-                        setThirdPlacePercentage(parseFloat(e.target.value) || 0);
-                        setHasSettingsChanges(true);
-                      }}
-                      disabled={!isAdmin}
-                    />
+                  <div className="flex items-center justify-between mb-3">
+                    <label className="block text-sm font-medium text-gray-300">
+                      Distribuição de Prêmios por Rodada (%)
+                    </label>
+                    {isAdmin && (
+                      <div className="flex space-x-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            if (prizeDistribution.length > 0) {
+                              const newDist = prizeDistribution.slice(0, -1);
+                              setPrizeDistribution(newDist);
+                              setHasSettingsChanges(true);
+                            }
+                          }}
+                          className="text-xs px-2 py-1 h-auto bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300"
+                          title="Remover última posição"
+                          disabled={prizeDistribution.length === 0}
+                        >
+                          <X className="w-3 h-3 mr-1" />
+                          Remover
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setPrizeDistribution([...prizeDistribution, 0]);
+                            setHasSettingsChanges(true);
+                          }}
+                          className="text-xs px-2 py-1 h-auto"
+                        >
+                          <Plus className="w-3 h-3 mr-1" />
+                          Adicionar
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-gray-400 text-sm mt-2">
-                    Total: {(firstPlacePercentage + secondPlacePercentage + thirdPlacePercentage).toFixed(2)}%
-                    (restante vai para mesa final)
+
+                  <div className="grid grid-cols-5 gap-3">
+                    {prizeDistribution.map((percentage, index) => (
+                      <div key={index}>
+                        <Input
+                          label={`${index + 1}º`}
+                          type="number"
+                          step="0.01"
+                          value={percentage}
+                          onChange={(e) => {
+                            const newDist = [...prizeDistribution];
+                            newDist[index] = parseFloat(e.target.value) || 0;
+                            setPrizeDistribution(newDist);
+                            setHasSettingsChanges(true);
+                          }}
+                          disabled={!isAdmin}
+                          className="mb-0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 p-3 bg-white/5 rounded-lg border border-white/10 flex justify-between items-center">
+                    <span className="text-sm text-gray-300">Total Distribuído:</span>
+                    <span className={`text-lg font-bold ${Math.abs(prizeDistribution.reduce((a, b) => a + b, 0) - 100) < 0.1 ? 'text-green-400' : 'text-red-400'}`}>
+                      {prizeDistribution.reduce((a, b) => a + b, 0).toFixed(2)}%
+                    </span>
+                  </div>
+                  {Math.abs(prizeDistribution.reduce((a, b) => a + b, 0) - 100) >= 0.1 && (
+                    <p className="text-red-400 text-xs mt-1">
+                      A soma das porcentagens deve ser exatamente 100%.
+                    </p>
+                  )}
+                  <p className="text-gray-500 text-xs mt-2">
+                    O valor líquido (após descontar a Mesa Final) será dividido conforme estas porcentagens.
                   </p>
                 </div>
 
@@ -650,7 +781,7 @@ export default function Settings() {
                       <div className="flex flex-col items-end">
                         <Button
                           variant="primary"
-                          onClick={handleGenerateFinalTable}
+                          onClick={handleGenerateFinalTableRequest}
                           className={`bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 ${(rounds?.filter(r => r.status === 'completed' && !r.is_final_table).length || 0) < (tournamentSettings?.total_rounds || 24)
                             ? 'opacity-50 cursor-not-allowed'
                             : ''
@@ -677,6 +808,7 @@ export default function Settings() {
                 </div>
               </div>
             </div>
+
           </CardContent>
         </Card>
 
@@ -872,11 +1004,10 @@ export default function Settings() {
               <h4 className="text-white font-medium mb-2">Sistema de Premiação</h4>
               <p className="text-gray-400 text-sm">
                 {finalTableType === 'percentage'
-                  ? `${finalTablePercentage.toFixed(2)}% de cada buy-in`
-                  : `$${finalTableFixedValue.toFixed(2)} por rodada`} vai para o prêmio da mesa final.
+                  ? `${finalTablePercentage.toFixed(0)}% de cada buy-in`
+                  : `$${finalTableFixedValue.toFixed(0)} por rodada`} vai para o prêmio da mesa final.
                 Os {finalTableTopPlayers} melhores jogadores após {totalRounds} rodadas disputam a mesa final.
-                O restante é distribuído em cada rodada: {firstPlacePercentage}% para o 1º lugar,
-                {secondPlacePercentage}% para o 2º e {thirdPlacePercentage}% para o 3º.
+                O restante é distribuído em cada rodada conforme as porcentagens definidas acima.
               </p>
             </div>
             <div>
@@ -889,6 +1020,15 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
-    </Layout>
+      {/* Confirmation Modal */}
+      <ConfirmationModal
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        variant={confirmModal.variant}
+      />
+    </Layout >
   );
 }

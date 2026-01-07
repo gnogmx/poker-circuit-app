@@ -41,13 +41,13 @@ function generateChampionshipCode(): string {
 }
 
 // Helper to get championship_id from header
-function getChampionshipId(c: any): number | null {
+function getChampionshipId(c: { req: { header: (name: string) => string | undefined } }): number | null {
   const championshipId = c.req.header('X-Championship-Id');
   return championshipId ? parseInt(championshipId, 10) : null;
 }
 
 // Auth middleware - Verifies user is logged in
-const requireAuth = async (c: any, next: any) => {
+const requireAuth = async (c: { env: { DB: D1Database }; req: { header: (name: string) => string | undefined }; json: (data: unknown, status?: number) => Response; set: (key: string, value: User) => void }, next: () => Promise<void>) => {
   const db = c.env.DB;
   const authHeader = c.req.header("Authorization");
 
@@ -71,7 +71,7 @@ const requireAuth = async (c: any, next: any) => {
 };
 
 // Admin middleware - Verifies user is logged in AND is admin of the current championship
-const requireAdmin = async (c: any, next: any) => {
+const requireAdmin = async (c: { env: { DB: D1Database }; get: (key: string) => User; json: (data: unknown, status?: number) => Response; req: { header: (name: string) => string | undefined } }, next: () => Promise<void>) => {
   const db = c.env.DB;
   const championshipId = getChampionshipId(c);
   const user = c.get('user') as User;
@@ -231,7 +231,7 @@ app.get("/api/rounds", async (c) => {
         SELECT p.id, p.name
         FROM players p
         JOIN round_players rp ON p.id = rp.player_id
-        WHERE rp.round_id = ?
+        WHERE rp.round_id = ? AND (rp.is_substituted = 0 OR rp.is_substituted IS NULL)
         ORDER BY p.name
       `).bind(r.id).all();
 
@@ -266,7 +266,7 @@ app.get("/api/rounds/active", async (c) => {
     SELECT p.* 
     FROM players p
     JOIN round_players rp ON p.id = rp.player_id
-    WHERE rp.round_id = ?
+    WHERE rp.round_id = ? AND (rp.is_substituted = 0 OR rp.is_substituted IS NULL)
     ORDER BY p.name
   `).bind(round.id).all();
 
@@ -404,8 +404,14 @@ app.post("/api/rounds/:id/complete", requireAuth, requireAdmin, zValidator("json
 
   // Insert results with calculated points
   for (const result of data.results) {
-    const points = rulesMap.get(result.position) || 0;
-    console.log(`[Complete Round] Player ${result.player_id} position ${result.position}: ${points} points`);
+    let points = (round.is_final_table) ? 0 : (rulesMap.get(result.position) || 0);
+
+    // Apply multiplier for freezeout
+    if (round.round_type === 'freezeout') {
+      points = points * 2;
+    }
+
+    console.log(`[Complete Round] Player ${result.player_id} position ${result.position}: ${points} points (Type: ${round.round_type})`);
 
     await db.prepare(
       "INSERT INTO round_results (round_id, player_id, position, points, rebuys, knockout_earnings, prize) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -415,8 +421,8 @@ app.post("/api/rounds/:id/complete", requireAuth, requireAdmin, zValidator("json
       result.position,
       points,
       result.rebuys || 0,
-      result.knockout_earnings || 0,
-      result.prize || 0
+      Math.round(result.knockout_earnings || 0),
+      Math.round(result.prize || 0)
     ).run();
   }
 
@@ -542,7 +548,7 @@ app.get("/api/rankings", async (c) => {
 
   // Get all completed rounds (excluding final table)
   const rounds = await db.prepare(`
-    SELECT id, round_number 
+    SELECT id, round_number, buy_in_value, rebuy_value 
     FROM rounds 
     WHERE championship_id = ? AND status = 'completed' AND (is_final_table = 0 OR is_final_table IS NULL)
     ORDER BY round_number
@@ -574,35 +580,41 @@ app.get("/api/rankings", async (c) => {
     };
   });
 
-  // Calculate final table prize pool
-  const completedRounds = await db.prepare(
-    "SELECT COUNT(*) as count FROM rounds WHERE championship_id = ? AND status = 'completed'"
-  ).bind(championshipId).first();
-
-  const roundsCount = (completedRounds as { count: number })?.count || 0;
-  const defaultBuyIn = (settings as TournamentSettings)?.default_buy_in || 600;
-  const finalTablePercentage = (settings as TournamentSettings)?.final_table_percentage || 33.33;
-  const finalTableFixedValue = (settings as TournamentSettings)?.final_table_fixed_value || 0;
-
-  const playersPerRound = await db.prepare(`
-    SELECT COUNT(DISTINCT rp.player_id) as avg_count
-    FROM round_players rp
-    JOIN rounds r ON rp.round_id = r.id
-    WHERE r.championship_id = ? AND r.status = 'completed'
-    GROUP BY rp.round_id
+  // Calculate final table prize pool accurately using actual gross
+  const roundsData = await db.prepare(`
+    SELECT r.id, r.buy_in_value, r.rebuy_value, r.round_type,
+    (SELECT COUNT(*) FROM round_players WHERE round_id = r.id) as player_count,
+    (SELECT SUM(rebuys) FROM round_results WHERE round_id = r.id) as rebuy_count
+    FROM rounds r
+    WHERE r.championship_id = ? AND r.status = 'completed' AND (r.is_final_table = 0 OR r.is_final_table IS NULL)
   `).bind(championshipId).all();
 
-  let avgPlayersPerRound = 0;
-  if (playersPerRound.results.length > 0) {
-    const sum = playersPerRound.results.reduce((acc: number, curr: unknown) => acc + (curr as { avg_count: number }).avg_count, 0);
-    avgPlayersPerRound = sum / playersPerRound.results.length;
+  const percentage = (settings as TournamentSettings)?.final_table_percentage || 33.33;
+  const fixedValue = (settings as TournamentSettings)?.final_table_fixed_value || 0;
+  const defaultBuyIn = (settings as TournamentSettings)?.default_buy_in || 600;
+
+  let totalGross = 0;
+  if (roundsData.results) {
+    for (const round of roundsData.results) {
+      const buyIn = (round.buy_in_value as number) || 0;
+      const rebuy = (round.rebuy_value as number) || 0;
+      const players = (round.player_count as number) || 0;
+      const rebuys = (round.rebuy_count as number) || 0;
+
+      totalGross += (buyIn * players) + (rebuy * rebuys);
+    }
   }
 
   let finalTablePrizePool = 0;
-  if (finalTableFixedValue > 0) {
-    finalTablePrizePool = roundsCount * avgPlayersPerRound * finalTableFixedValue;
+  if (fixedValue > 0) {
+    // Calculate sum of contributions: (entries + rebuys) * fixedValue * multiplier
+    finalTablePrizePool = (roundsData.results as any[]).reduce((sum: number, r: { player_count: unknown; rebuy_count: unknown; round_type: unknown }) => {
+      const entries = ((r.player_count as number) || 0) + ((r.rebuy_count as number) || 0);
+      const multiplier = (r.round_type as string) === 'freezeout' ? 2 : 1;
+      return sum + (entries * fixedValue * multiplier);
+    }, 0);
   } else {
-    finalTablePrizePool = roundsCount * avgPlayersPerRound * defaultBuyIn * (finalTablePercentage / 100);
+    finalTablePrizePool = totalGross * (percentage / 100);
   }
 
   // Calculate total prize and entries for each player
@@ -615,18 +627,22 @@ app.get("/api/rankings", async (c) => {
 
     completedRoundsList.forEach(round => {
       // Get all results for this round
-      const roundResults = (allResults.results as any[]).filter((r: any) => r.round_number === round.round_number);
+      const roundResults = (allResults.results as Array<RoundResult & { round_number: number }>).filter((r) => r.round_number === round.round_number);
 
       // Calculate round prize pool
       const roundBuyIn = round.buy_in_value || defaultBuyIn;
-      const roundRebuy = round.rebuy_value || (roundBuyIn / 2); // Default rebuy logic if not set
+      const roundRebuy = round.rebuy_value || roundBuyIn; // Match frontend logic (default_buy_in)
 
       // Check if player played this round
-      const playerResult = roundResults.find((r: any) => r.player_id === player.player_id);
+      const playerResult = roundResults.find((r) => r.player_id === player.player_id);
 
       if (playerResult) {
         // Add entries cost
-        totalEntries += roundBuyIn + ((playerResult.rebuys || 0) * roundRebuy);
+        const entryAmount = roundBuyIn + ((playerResult.rebuys || 0) * roundRebuy);
+        totalEntries += entryAmount;
+
+        // Debug logging
+        console.log(`Player ${player.player_name} Round ${round.round_number}: buyIn=${roundBuyIn}, rebuys=${playerResult.rebuys}, rebuyValue=${roundRebuy}, entryAmount=${entryAmount}`);
 
         // Add prizes
         totalPrize += (playerResult.prize || 0);
@@ -676,10 +692,51 @@ app.get("/api/tournament-settings", async (c) => {
         first_place_percentage,
         second_place_percentage,
         third_place_percentage,
-        final_table_top_players
-      ) VALUES (?, 15, '100/200,200/400,400/800,800/1600,1600/3200', 600, 33.33, 0, 24, 60, 30, 10, 9) RETURNING *`
-    ).bind(championshipId).first();
+        final_table_top_players,
+        fourth_place_percentage,
+        fifth_place_percentage,
+        prize_distribution
+      ) VALUES (?, 15, '100/200,200/400,400/800,800/1600,1600/3200', 600, 33.33, 0, 24, 60, 30, 10, 9, 0, 0, ?) RETURNING *`
+    ).bind(championshipId, JSON.stringify([60, 30, 10, 0, 0])).first();
+
+    if (defaultSettings && defaultSettings.prize_distribution) {
+      try {
+        defaultSettings.prize_distribution = JSON.parse(defaultSettings.prize_distribution as string);
+      } catch {
+        defaultSettings.prize_distribution = [60, 30, 10, 0, 0];
+      }
+    }
     return c.json(defaultSettings);
+  }
+
+  // Parse JSON for existing settings
+  if (settings.prize_distribution) {
+    try {
+      settings.prize_distribution = JSON.parse(settings.prize_distribution as string);
+    } catch {
+      // Fallback if parsing fails or data is corrupt
+      // Construct from legacy columns if available, or default
+      const p1 = (settings.first_place_percentage as number) || 0;
+      const p2 = (settings.second_place_percentage as number) || 0;
+      const p3 = (settings.third_place_percentage as number) || 0;
+      const p4 = (settings.fourth_place_percentage as number) || 0;
+      const p5 = (settings.fifth_place_percentage as number) || 0;
+
+      // Only use legacy if they sum to roughly 100 or exist
+      if (p1 + p2 + p3 + p4 + p5 > 0) {
+        settings.prize_distribution = [p1, p2, p3, p4, p5];
+      } else {
+        settings.prize_distribution = [60, 30, 10, 0, 0];
+      }
+    }
+  } else {
+    // Legacy fallback for records without prize_distribution
+    const p1 = (settings.first_place_percentage as number) || 0;
+    const p2 = (settings.second_place_percentage as number) || 0;
+    const p3 = (settings.third_place_percentage as number) || 0;
+    const p4 = (settings.fourth_place_percentage as number) || 0;
+    const p5 = (settings.fifth_place_percentage as number) || 0;
+    settings.prize_distribution = [p1, p2, p3, p4, p5];
   }
 
   return c.json(settings);
@@ -697,6 +754,15 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
   const existing = await db.prepare(
     "SELECT id FROM tournament_settings WHERE championship_id = ? ORDER BY id DESC LIMIT 1"
   ).bind(championshipId).first();
+
+  // Validate prize distribution sum if provided
+  if (data.prize_distribution) {
+    const sum = data.prize_distribution.reduce((a: number, b: number) => a + b, 0);
+    // Allow small floating point margin or strict 100
+    if (Math.abs(sum - 100) > 0.1) {
+      return c.json({ error: `Prize distribution must sum to 100% (Current: ${sum}%)` }, 400);
+    }
+  }
 
   if (existing) {
     const result = await db.prepare(
@@ -717,6 +783,8 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
         final_table_4th_percentage = ?,
         final_table_5th_percentage = ?,
         rules_text = ?,
+        final_table_date = ?,
+        prize_distribution = ?,
         updated_at = CURRENT_TIMESTAMP 
       WHERE id = ? RETURNING *`
     ).bind(
@@ -735,13 +803,65 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
       data.final_table_3rd_percentage ?? 20,
       data.final_table_4th_percentage ?? 10,
       data.final_table_5th_percentage ?? 5,
-      data.rules_text ?? '',
+      data.rules_text ?? null,
+      data.final_table_date ?? null,
+      data.prize_distribution ? JSON.stringify(data.prize_distribution) : null,
       existing.id
     ).first();
+
+    // Parse JSON for response
+    if (result && result.prize_distribution) {
+      try {
+        result.prize_distribution = JSON.parse(result.prize_distribution as string);
+      } catch {
+        result.prize_distribution = [];
+      }
+    }
     return c.json(result);
   } else {
-    // Should not happen as GET creates default, but just in case
-    return c.json({ error: "Settings not found" }, 404);
+    // Insert new settings
+    // If no prize_distribution provided, use defaults from individual columns or standard
+    const defaultDistribution = [60, 30, 10, 0, 0];
+    const distribution = data.prize_distribution || defaultDistribution;
+
+    const result = await db.prepare(
+      `INSERT INTO tournament_settings (
+        championship_id,
+        blind_level_duration, 
+        blind_levels,
+        default_buy_in,
+        final_table_percentage,
+        final_table_fixed_value,
+        total_rounds,
+        first_place_percentage,
+        second_place_percentage,
+        third_place_percentage,
+        final_table_top_players,
+        prize_distribution
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`
+    ).bind(
+      championshipId,
+      data.blind_level_duration,
+      data.blind_levels,
+      data.default_buy_in ?? 600,
+      data.final_table_percentage ?? 33.33,
+      data.final_table_fixed_value ?? 0,
+      data.total_rounds ?? 24,
+      data.first_place_percentage ?? 60,
+      data.second_place_percentage ?? 30,
+      data.third_place_percentage ?? 10,
+      data.final_table_top_players ?? 9,
+      JSON.stringify(distribution)
+    ).first();
+
+    if (result && result.prize_distribution) {
+      try {
+        result.prize_distribution = JSON.parse(result.prize_distribution as string);
+      } catch {
+        result.prize_distribution = [];
+      }
+    }
+    return c.json(result);
   }
 });
 
@@ -877,9 +997,9 @@ app.post("/api/final-table/generate", requireAuth, requireAdmin, async (c) => {
       totalRounds + 1, // Round number is total + 1
       finalTableDate,
       'Mesa Final',
-      'regular',
-      null,
-      null,
+      'freezeout',
+      0,
+      0,
       null
     ).first();
 
@@ -898,9 +1018,10 @@ app.post("/api/final-table/generate", requireAuth, requireAdmin, async (c) => {
       round,
       player_count: topPlayers.results.length
     });
-  } catch (error: any) {
-    console.error('Error generating final table:', error);
-    return c.json({ error: error.message || "Erro ao gerar mesa final" }, 500);
+  } catch (error: unknown) {
+    console.error('[Final Table] Generation error:', error);
+    const message = error instanceof Error ? error.message : 'Failed to generate final table';
+    return c.json({ error: message }, 500);
   }
 });
 
@@ -1045,8 +1166,8 @@ app.post("/api/championships", requireAuth, zValidator("json", CreateChampionshi
 
   // Create championship
   const championship = await db.prepare(
-    "INSERT INTO championships (name, code, logo_url, created_by) VALUES (?, ?, ?, ?) RETURNING *"
-  ).bind(data.name, code, data.logo_url || null, user.id).first() as Championship;
+    "INSERT INTO championships (name, code, logo_url, created_by, is_single_tournament) VALUES (?, ?, ?, ?, ?) RETURNING *"
+  ).bind(data.name, code, data.logo_url || null, user.id, data.is_single_tournament ? 1 : 0).first() as Championship;
 
   // Add creator as admin
   await db.prepare(
@@ -1054,6 +1175,9 @@ app.post("/api/championships", requireAuth, zValidator("json", CreateChampionshi
   ).bind(championship.id, user.id).run();
 
   // Create default settings for this championship
+  // For single tournaments, set final_table_percentage to 0 (100% goes to round prizes)
+  const finalTablePercentage = championship.is_single_tournament === 1 ? 0 : 33.33;
+
   await db.prepare(
     `INSERT INTO tournament_settings (
       championship_id, 
@@ -1066,9 +1190,11 @@ app.post("/api/championships", requireAuth, zValidator("json", CreateChampionshi
       first_place_percentage,
       second_place_percentage,
       third_place_percentage,
-      final_table_top_players
-    ) VALUES (?, 15, '100/200, 200/400, 300/600, 400/800, 500/1000, BREAK, 600/1200, 800/1600, 1000/2000, 1500/3000, BREAK, 2000/4000, 3000/6000, 4000/8000, 5000/10000, BREAK, 6000/12000, 8000/16000, 10000/20000', 600, 33.33, 0, 24, 60, 30, 10, 9)`
-  ).bind(championship.id).run();
+      final_table_top_players,
+      fourth_place_percentage,
+      fifth_place_percentage
+    ) VALUES (?, 15, '100/200, 200/400, 300/600, 400/800, 500/1000, BREAK, 600/1200, 800/1600, 1000/2000, 1500/3000, BREAK, 2000/4000, 3000/6000, 4000/8000, 5000/10000, BREAK, 6000/12000, 8000/16000, 10000/20000', 600, ?, 0, 24, 60, 30, 10, 9, 0, 0)`
+  ).bind(championship.id, finalTablePercentage).run();
 
   // Create default scoring rules
   const defaultRules = [
@@ -1101,6 +1227,99 @@ app.post("/api/championships", requireAuth, zValidator("json", CreateChampionshi
 
   return c.json({ ...championship, role: 'admin' });
 });
+
+// Leave championship (remove from list)
+app.post("/api/championships/:id/leave", requireAuth, async (c) => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const championshipId = parseInt(c.req.param('id'));
+
+  await db.prepare(`
+        DELETE FROM championship_members 
+        WHERE championship_id = ? AND user_id = ?
+    `).bind(championshipId, user.id).run();
+
+  return c.json({ success: true });
+});
+
+// Delete championship
+app.delete("/api/championships/:id", requireAuth, async (c) => {
+  try {
+    const db = c.env.DB;
+    const user = c.get('user');
+    const championshipId = parseInt(c.req.param('id'));
+
+    console.log('Deleting championship:', championshipId, 'for user:', user.id);
+
+    // Check if user is admin of this championship OR is the creator
+    const championship = await db.prepare(`
+        SELECT created_by FROM championships WHERE id = ?
+    `).bind(championshipId).first();
+
+    const membership = await db.prepare(`
+      SELECT role FROM championship_members
+      WHERE championship_id = ? AND user_id = ?
+    `).bind(championshipId, user.id).first();
+
+    console.log('Permission check:', {
+      championshipId,
+      userId: user.id,
+      createdBy: championship?.created_by,
+      membership
+    });
+
+    const isCreator = championship?.created_by === user.id;
+    const isAdminMember = membership?.role === 'admin';
+
+    if (!isCreator && !isAdminMember) {
+      return c.json({
+        error: 'Unauthorized',
+        debug: {
+          user_id: user.id,
+          championship_id: championshipId,
+          is_creator: isCreator,
+          membership_found: !!membership,
+          role: membership?.role
+        }
+      }, 403);
+    }
+
+    // Delete in correct order to avoid foreign key constraints
+    console.log('Deleting tournament_settings...');
+    await db.prepare(`DELETE FROM tournament_settings WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting scoring_rules...');
+    await db.prepare(`DELETE FROM scoring_rules WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting round_schedule...');
+    await db.prepare(`DELETE FROM round_schedule WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting round_players...');
+    await db.prepare(`DELETE FROM round_players WHERE round_id IN (SELECT id FROM rounds WHERE championship_id = ?)`).bind(championshipId).run();
+
+    console.log('Deleting round_results...');
+    await db.prepare(`DELETE FROM round_results WHERE round_id IN (SELECT id FROM rounds WHERE championship_id = ?)`).bind(championshipId).run();
+
+    console.log('Deleting rounds...');
+    await db.prepare(`DELETE FROM rounds WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting players...');
+    await db.prepare(`DELETE FROM players WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting championship_members...');
+    await db.prepare(`DELETE FROM championship_members WHERE championship_id = ?`).bind(championshipId).run();
+
+    console.log('Deleting championship...');
+    await db.prepare(`DELETE FROM championships WHERE id = ?`).bind(championshipId).run();
+
+    console.log('Championship deleted successfully');
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting championship:', error);
+    return c.json({ error: 'Failed to delete championship: ' + (error as Error).message }, 500);
+  }
+});
+
 
 app.post("/api/championships/join", requireAuth, zValidator("json", JoinChampionshipSchema), async (c) => {
   const db = c.env.DB;
@@ -1245,15 +1464,17 @@ app.post("/api/rounds/:id/replace-player", requireAuth, requireAdmin, async (c) 
     return c.json({ error: "Round not found" }, 404);
   }
 
-  // Remove player
-  await db.prepare("DELETE FROM round_players WHERE round_id = ? AND player_id = ?")
+  // Mark player as substituted instead of deleting
+  await db.prepare("UPDATE round_players SET is_substituted = 1 WHERE round_id = ? AND player_id = ?")
     .bind(roundId, playerIdToRemove).run();
 
-  // Get current players in round to exclude them
+  // Get current players in round (including substituted ones) to exclude them
+  // We want to exclude anyone who has EVER been in this round to prevent re-selection
   const currentPlayers = await db.prepare("SELECT player_id FROM round_players WHERE round_id = ?")
     .bind(roundId).all();
 
-  const excludedIds = currentPlayers.results.map((p: any) => p.player_id);
+  const excludedIds = (currentPlayers.results as Array<{ player_id: number }>).map((p) => p.player_id);
+  excludedIds.push(playerIdToRemove); // Ensure we don't pick the same player we just removed
 
   // Find next best player from ranking who is NOT in the round
   // Using the same ranking logic as before

@@ -4,7 +4,6 @@ import type { User } from '@/shared/types';
 interface AuthContextType {
     user: User | null;
     token: string | null;
-    isAdmin: boolean;
     login: (email: string, password: string) => Promise<boolean>;
     register: (email: string, password: string, name: string) => Promise<boolean>;
     logout: () => void;
@@ -21,9 +20,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [token, setToken] = useState<string | null>(() => {
         return localStorage.getItem('admin_token');
     });
-
-    // For now, all logged-in users are considered "admin" until we implement championship-specific roles
-    const isAdmin = !!user;
 
     const register = async (email: string, password: string, name: string): Promise<boolean> => {
         try {
@@ -78,12 +74,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const logout = () => {
         setUser(null);
         setToken(null);
+        // Clear all authentication data
         localStorage.removeItem('user');
         localStorage.removeItem('admin_token');
+        // Clear championship context
+        localStorage.removeItem('current_championship');
+        localStorage.removeItem('currentChampionshipId');
+        // Clear onboarding flags
+        localStorage.removeItem('hasCompletedOnboarding');
+        // Clear any podium/session flags (they use sessionStorage but clear just in case)
+        sessionStorage.clear();
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, isAdmin, login, register, logout }}>
+        <AuthContext.Provider value={{ user, token, login, register, logout }}>
             {children}
         </AuthContext.Provider>
     );

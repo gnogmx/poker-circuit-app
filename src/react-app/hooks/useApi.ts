@@ -64,8 +64,9 @@ export async function apiRequest(url: string, options: RequestInit = {}) {
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(error.error || `HTTP error! status: ${response.status}`);
+    const errorBody = await response.json().catch(() => ({ error: 'Request failed' }));
+    const debugInfo = errorBody.debug ? ' Debug: ' + JSON.stringify(errorBody.debug) : '';
+    throw new Error((errorBody.error || `HTTP error! status: ${response.status}`) + debugInfo);
   }
 
   return response.json();
