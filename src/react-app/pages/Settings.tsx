@@ -57,7 +57,7 @@ export default function Settings() {
     if (rules && editingRules.length === 0) {
       setEditingRules(rules.map((r) => ({ position: r.position, points: r.points })));
     }
-  }, [rules]);
+  }, [rules, editingRules.length]);
 
   // Load settings when they arrive from API
   useEffect(() => {

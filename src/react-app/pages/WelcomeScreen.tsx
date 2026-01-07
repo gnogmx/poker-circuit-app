@@ -74,7 +74,7 @@ export default function WelcomeScreen() {
                                 <Sparkles className="w-10 h-10 text-white" />
                             </div>
                             <h1 className="text-4xl font-bold text-white">
-                                Bem-vindo ao Poker Pro! 🎉
+                                Bem-vindo ao Poker Circuit! 🎉
                             </h1>
                             <p className="text-xl text-gray-300">
                                 Escolha como você quer começar

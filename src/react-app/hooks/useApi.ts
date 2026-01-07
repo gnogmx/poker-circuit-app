@@ -1,4 +1,4 @@
-import { useState, useEffect, type DependencyList } from 'react';
+import { useState, useEffect, useCallback, type DependencyList } from 'react';
 
 const API_BASE_URL = import.meta.env.PROD
   ? 'https://poker-pro.poker-pro-019ab366.workers.dev'
@@ -9,7 +9,7 @@ export function useApi<T>(url: string, deps: DependencyList = []) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_token');
@@ -37,11 +37,11 @@ export function useApi<T>(url: string, deps: DependencyList = []) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [url]);
 
   useEffect(() => {
     refresh();
-  }, deps);
+  }, [refresh, ...deps]);
 
   return { data, loading, error, refresh };
 }

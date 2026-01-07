@@ -198,7 +198,7 @@ export default function LiveGame() {
         setNextPosition(initialPlayers.length);
       }
     }
-  }, [activeRound]);
+  }, [activeRound, gamePlayers.length]);
 
   useEffect(() => {
     if (activeRound && activeRound.is_started && !isPaused) {
@@ -277,21 +277,8 @@ export default function LiveGame() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [activeRound, isPaused, settings, blindLevels, hasPlayedWarning, hasPlayedLevelUp]);
+  }, [activeRound, isPaused, settings, blindLevels, hasPlayedWarning, hasPlayedLevelUp, refreshRound]);
 
-  // Auto-complete round when all players are inactive (game over)
-  useEffect(() => {
-    const activeCount = gamePlayers.filter(p => p.isActive).length;
-    const totalCount = gamePlayers.length;
-
-    if (totalCount > 0 && activeCount === 0 && !completing && !showPrizeModal && activeRound) {
-      // Small delay to ensure state is settled and UI updates
-      const timer = setTimeout(() => {
-        handleCompleteRound(true);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [gamePlayers, completing, showPrizeModal, activeRound]);
 
   // Removed useEffect that was resetting isFlashing - it was interfering with alerts
 
@@ -703,6 +690,20 @@ export default function LiveGame() {
       setCompleting(false);
     }
   };
+
+  // Auto-complete round when all players are inactive (game over)
+  useEffect(() => {
+    const activeCount = gamePlayers.filter(p => p.isActive).length;
+    const totalCount = gamePlayers.length;
+
+    if (totalCount > 0 && activeCount === 0 && !completing && !showPrizeModal && activeRound) {
+      // Small delay to ensure state is settled and UI updates
+      const timer = setTimeout(() => {
+        handleCompleteRound(true);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [gamePlayers, completing, showPrizeModal, activeRound, handleCompleteRound]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);

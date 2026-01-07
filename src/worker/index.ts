@@ -608,7 +608,7 @@ app.get("/api/rankings", async (c) => {
   let finalTablePrizePool = 0;
   if (fixedValue > 0) {
     // Calculate sum of contributions: (entries + rebuys) * fixedValue * multiplier
-    finalTablePrizePool = (roundsData.results as any[]).reduce((sum: number, r: { player_count: unknown; rebuy_count: unknown; round_type: unknown }) => {
+    finalTablePrizePool = (roundsData.results as unknown as { player_count: number; rebuy_count: number; round_type: string }[]).reduce((sum: number, r: { player_count: number; rebuy_count: number; round_type: string }) => {
       const entries = ((r.player_count as number) || 0) + ((r.rebuy_count as number) || 0);
       const multiplier = (r.round_type as string) === 'freezeout' ? 2 : 1;
       return sum + (entries * fixedValue * multiplier);

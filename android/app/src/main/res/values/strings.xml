@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Poker Pro</string>
-    <string name="title_activity_main">Poker Pro</string>
-    <string name="package_name">com.pokerpro.app</string>
-    <string name="custom_url_scheme">com.pokerpro.app</string>
+    <string name="app_name">Poker Circuit</string>
+    <string name="title_activity_main">Poker Circuit</string>
+    <string name="package_name">com.pokercircuit.app</string>
+    <string name="custom_url_scheme">com.pokercircuit.app</string>
 </resources>

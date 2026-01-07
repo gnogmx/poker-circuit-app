@@ -60,7 +60,7 @@ export default function Ranking() {
         sessionStorage.setItem(championshipKey, 'true');
       }
     }
-  }, [isChampionshipComplete, rankings.length]);
+  }, [isChampionshipComplete, rankings.length, currentChampionship?.id]);
 
   const handleExport = async () => {
     try {

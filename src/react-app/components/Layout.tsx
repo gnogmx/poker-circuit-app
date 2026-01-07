@@ -40,7 +40,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             {/* Logo and Game Info */}
             <div className="flex items-center space-x-4">
               <div className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                Poker Pro
+                Poker Circuit
               </div>
               {currentChampionship && (
                 <div className="flex items-center space-x-2">
@@ -65,8 +65,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     key={item.path}
                     to={item.path}
                     className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${isActive
-                        ? 'bg-white/10 text-white'
-                        : 'text-gray-300 hover:bg-white/5 hover:text-white'
+                      ? 'bg-white/10 text-white'
+                      : 'text-gray-300 hover:bg-white/5 hover:text-white'
                       }`}
                   >
                     <Icon className="w-4 h-4" />

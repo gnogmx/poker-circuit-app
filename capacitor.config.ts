@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.pokerpro.app',
-  appName: 'Poker Pro',
+  appId: 'com.pokercircuit.app',
+  appName: 'Poker Circuit',
   webDir: 'dist/client'
 };
 
