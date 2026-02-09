@@ -106,6 +106,9 @@ export const TournamentSettingsSchema = z.object({
   rules_text: z.string().optional(),
   final_table_date: z.string().optional(),
   prize_distribution: z.string().optional(),
+  discard_count: z.number().optional(),
+  discard_after_round: z.number().optional(),
+  blind_level_durations: z.string().optional(),
   created_at: z.string(),
   updated_at: z.string(),
 });
@@ -131,6 +134,9 @@ export const UpdateTournamentSettingsSchema = z.object({
   rules_text: z.string().optional(),
   final_table_date: z.string().optional(),
   prize_distribution: z.array(z.number()).optional(),
+  discard_count: z.number().int().min(0).optional(),
+  discard_after_round: z.number().int().min(0).optional(),
+  blind_level_durations: z.record(z.string(), z.number()).optional(),
 });
 
 export type Player = z.infer<typeof PlayerSchema>;

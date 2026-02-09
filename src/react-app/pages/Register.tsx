@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router';
 import { useAuth } from '@/react-app/contexts/AuthContext';
-import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
+import Card, { CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { UserPlus } from 'lucide-react';
+import { useLanguage } from '@/react-app/hooks/useLanguage';
 
 export default function Register() {
     const [name, setName] = useState('');
@@ -13,6 +13,7 @@ export default function Register() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const { register } = useAuth();
+    const { t } = useLanguage();
     const navigate = useNavigate();
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -23,8 +24,8 @@ export default function Register() {
         const success = await register(email, password, name);
 
         if (success) {
-            // Redirect to welcome screen for first-time users
-            navigate('/welcome');
+            // Redirect to championship selector after registration
+            navigate('/');
         } else {
             setError('Erro ao criar conta. Email pode já estar cadastrado.');
         }
@@ -33,30 +34,32 @@ export default function Register() {
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex flex-col items-center justify-center p-4">
+            {/* Logo and Title */}
+            <div className="text-center mb-8 space-y-4">
+                <img
+                    src="/poker_pro_spade_logo.png"
+                    alt="Poker Circuit"
+                    className="w-60 h-60 mx-auto object-contain mix-blend-lighten"
+                />
+                <h1 className="text-3xl font-bold text-white">Poker Circuit</h1>
+                <p className="text-gray-400">{t('registerTitle')}</p>
+            </div>
+
             <Card className="w-full max-w-md">
-                <CardHeader>
-                    <div className="flex items-center justify-center space-x-3 mb-2">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-                            <UserPlus className="w-6 h-6 text-white" />
-                        </div>
-                        <h2 className="text-2xl font-bold text-white">Criar Conta</h2>
-                    </div>
-                    <p className="text-gray-400 text-center">Cadastre-se para começar</p>
-                </CardHeader>
-                <CardContent>
+                <CardContent className="p-6">
                     <form onSubmit={handleSubmit} className="space-y-4">
                         <Input
-                            label="Nome"
+                            label={t('name')}
                             type="text"
                             value={name}
                             onChange={(e) => setName(e.target.value)}
-                            placeholder="Seu nome"
+                            placeholder={t('yourName')}
                             required
                         />
 
                         <Input
-                            label="Email"
+                            label={t('email')}
                             type="email"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
@@ -65,31 +68,38 @@ export default function Register() {
                         />
 
                         <Input
-                            label="Senha"
+                            label={t('password')}
                             type="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            placeholder="Mínimo 6 caracteres"
+                            placeholder={t('minPassword')}
                             required
                             minLength={6}
                         />
 
                         {error && (
                             <div className="text-red-400 text-sm text-center">
-                                {error}
+                                {t('errorRegister')}
                             </div>
                         )}
 
                         <Button type="submit" loading={loading} className="w-full">
-                            Criar Conta
+                            {t('registerConfig')}
                         </Button>
 
-                        <div className="text-center text-sm text-gray-400">
-                            Já tem conta? <Link to="/login" className="text-purple-400 hover:text-purple-300">Faça login</Link>
+                        <div className="text-center text-sm text-gray-400 pt-2">
+                            {t('alreadyHaveAccount')}{' '}
+                            <Link to="/login" className="text-blue-400 hover:text-blue-300">
+                                {t('doLogin')}
+                            </Link>
                         </div>
                     </form>
                 </CardContent>
             </Card>
+
+            <p className="mt-8 text-gray-500 text-sm">
+                {t('versionFooter')}
+            </p>
         </div>
     );
 }

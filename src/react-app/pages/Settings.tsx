@@ -8,9 +8,10 @@ import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Save, Plus, Loader2, Clock, Coins, Coffee, Trophy, DollarSign, Users, RotateCcw, Copy, X } from 'lucide-react';
+import { Save, Plus, Loader2, Clock, Coins, Coffee, Trophy, DollarSign, Users, RotateCcw, Copy, X, Shield, ShieldCheck } from 'lucide-react';
 
 import ConfirmationModal from '@/react-app/components/ConfirmationModal';
+import { useLanguage } from '@/react-app/hooks/useLanguage';
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -18,7 +19,21 @@ export default function Settings() {
   const { data: tournamentSettings, loading: loadingSettings, error: settingsError, refresh: refreshSettings } = useApi<TournamentSettings>('/api/tournament-settings');
   const { data: schedules, refresh: refreshSchedules } = useApi<RoundSchedule[]>('/api/schedules');
   const { data: rounds } = useApi<{ id: number; status: string; is_final_table?: boolean }[]>('/api/rounds');
-  const { isAdmin, isSingleTournament, currentChampionship } = useChampionship();
+  const { data: members, refresh: refreshMembers } = useApi<{ id: number; user_id: number; role: string; name: string; email: string }[]>('/api/championships/members');
+  const { isSingleTournament, currentChampionship, refreshChampionships, isAdmin } = useChampionship();
+  const { t } = useLanguage();
+  const [updatingRole, setUpdatingRole] = useState<number | null>(null);
+
+  // Force refresh championships on mount to ensure role is up-to-date
+  useEffect(() => {
+    console.log('🔐 Settings mount - refreshing championships');
+    refreshChampionships();
+  }, []);
+
+  // Debug: log admin status whenever it changes
+  useEffect(() => {
+    console.log('🔐 Settings - isAdmin:', isAdmin, 'role:', currentChampionship?.role, 'championship:', currentChampionship?.name);
+  }, [isAdmin, currentChampionship]);
 
   // Redirect if single tournament - settings not available
   useEffect(() => {
@@ -49,8 +64,13 @@ export default function Settings() {
   const [scheduleDate, setScheduleDate] = useState<string>('');
   const [scheduleNotes, setScheduleNotes] = useState<string>('');
   const [finalTableDate, setFinalTableDate] = useState<string>('');
+  const [discardCount, setDiscardCount] = useState<number>(3);
+  const [discardAfterRound, setDiscardAfterRound] = useState<number>(15);
   const [hasSettingsChanges, setHasSettingsChanges] = useState(false);
   const [submittingSettings, setSubmittingSettings] = useState(false);
+
+  // Custom duration per level (index => duration in minutes)
+  const [levelDurations, setLevelDurations] = useState<Record<number, number>>({});
 
   // Load rules when they arrive from API
   useEffect(() => {
@@ -69,6 +89,13 @@ export default function Settings() {
       setFinalTableFixedValue(tournamentSettings.final_table_fixed_value || 0);
       setFinalTableType(tournamentSettings.final_table_fixed_value && tournamentSettings.final_table_fixed_value > 0 ? 'fixed' : 'percentage');
       setTotalRounds(tournamentSettings.total_rounds || 24);
+      // Load custom level durations
+      if (tournamentSettings.blind_level_durations) {
+        const durations = typeof tournamentSettings.blind_level_durations === 'string'
+          ? JSON.parse(tournamentSettings.blind_level_durations)
+          : tournamentSettings.blind_level_durations;
+        setLevelDurations(durations || {});
+      }
 
       // Load prize distribution
       if (tournamentSettings.prize_distribution) {
@@ -103,6 +130,8 @@ export default function Settings() {
       setFinalTable5thPercentage(tournamentSettings.final_table_5th_percentage || 5);
       setRulesText(tournamentSettings.rules_text || '');
       setFinalTableDate(tournamentSettings.final_table_date || '');
+      setDiscardCount(tournamentSettings.discard_count ?? 3);
+      setDiscardAfterRound(tournamentSettings.discard_after_round ?? 15);
     }
   }, [tournamentSettings]);
 
@@ -180,6 +209,9 @@ export default function Settings() {
           final_table_5th_percentage: finalTable5thPercentage,
           rules_text: rulesText,
           final_table_date: finalTableDate,
+          discard_count: discardCount,
+          discard_after_round: discardAfterRound,
+          blind_level_durations: levelDurations,
         }),
       });
 
@@ -298,8 +330,8 @@ export default function Settings() {
   const handleGenerateFinalTableRequest = () => {
     setConfirmModal({
       isOpen: true,
-      title: 'Gerar Mesa Final',
-      message: 'Tem certeza que deseja gerar a Mesa Final? Esta ação criará uma nova rodada com os jogadores classificados.',
+      title: t('generateFinalTable'),
+      message: t('generateFinalTableConfirm'),
       onConfirm: handleGenerateFinalTable
     });
   };
@@ -313,13 +345,13 @@ export default function Settings() {
       // ... existing logic ...
 
 
-      alert(`Mesa Final criada com sucesso! ${response.player_count} jogadores adicionados.`);
+      alert(`${t('generatedFinalTable')} ${response.player_count} ${t('players').toLowerCase()} added.`);
 
       // Redirect to rounds page
       window.location.href = '/rounds';
     } catch (err: unknown) {
       console.error('Failed to generate final table:', err);
-      const errorMsg = (err instanceof Error && err.message) || 'Erro ao gerar mesa final. Verifique o console do navegador para mais detalhes.';
+      const errorMsg = (err instanceof Error && err.message) || t('errorGeneratingTable');
       alert(errorMsg);
     }
   };
@@ -328,12 +360,29 @@ export default function Settings() {
     return level.toUpperCase().includes('BREAK') || level.toUpperCase().includes('INTERVALO');
   };
 
+  const handleToggleAdmin = async (userId: number, currentRole: string) => {
+    const newRole = currentRole === 'admin' ? 'player' : 'admin';
+    try {
+      setUpdatingRole(userId);
+      await apiRequest(`/api/championships/members/${userId}/role`, {
+        method: 'PUT',
+        body: JSON.stringify({ role: newRole }),
+      });
+      refreshMembers();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro ao atualizar permissão';
+      alert(message);
+    } finally {
+      setUpdatingRole(null);
+    }
+  };
+
   return (
     <Layout>
       <div className="space-y-6">
         <div>
-          <h2 className="text-3xl font-bold text-white">Configurações</h2>
-          <p className="text-gray-400 mt-1">Configure o campeonato e as regras de pontuação</p>
+          <h2 className="text-3xl font-bold text-white">{t('settings')}</h2>
+          <p className="text-gray-400 mt-1">{t('configureChampionship')}</p>
         </div>
 
         {/* Championship Code Card */}
@@ -344,10 +393,10 @@ export default function Settings() {
                 <div className="flex-1">
                   <div className="flex items-center space-x-2 mb-2">
                     <Users className="w-5 h-5 text-blue-400" />
-                    <h3 className="text-lg font-semibold text-white">Código de Acesso</h3>
+                    <h3 className="text-lg font-semibold text-white">{t('accessCode')}</h3>
                   </div>
                   <p className="text-gray-400 text-sm mb-3">
-                    Compartilhe este código com os jogadores para que possam participar
+                    {t('shareCode')}
                   </p>
                   <div className="flex items-center space-x-3">
                     <div className="flex-1 bg-black/30 rounded-lg px-4 py-3 border border-blue-500/30">
@@ -359,12 +408,12 @@ export default function Settings() {
                       variant="secondary"
                       onClick={() => {
                         navigator.clipboard.writeText(currentChampionship.code);
-                        alert('Código copiado!');
+                        alert(t('codeCopied'));
                       }}
                       className="bg-blue-500/20 hover:bg-blue-500/30 border-blue-500/50"
                     >
                       <Copy className="w-4 h-4" />
-                      <span>Copiar</span>
+                      <span>{t('copy')}</span>
                     </Button>
                   </div>
                 </div>
@@ -378,12 +427,12 @@ export default function Settings() {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <DollarSign className="w-6 h-6 text-green-400" />
-                <h3 className="text-xl font-semibold text-white">Configurações de Premiação</h3>
+                <h3 className="text-xl font-semibold text-white">{t('prizeSettings')}</h3>
               </div>
               {isAdmin && (
                 <Button onClick={handleSaveSettings} loading={submittingSettings} disabled={!hasSettingsChanges}>
                   <Save className="w-4 h-4" />
-                  <span>Salvar</span>
+                  <span>{t('save')}</span>
                 </Button>
               )}
             </div>
@@ -394,12 +443,12 @@ export default function Settings() {
                 <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
               </div>
             ) : settingsError ? (
-              <p className="text-center text-red-400 py-12">Erro ao carregar configurações</p>
+              <p className="text-center text-red-400 py-12">{t('error')}</p>
             ) : (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Input
-                    label="Buy-in Padrão ($)"
+                    label={t('defaultBuyIn') + " ($)"}
                     type="number"
                     step="1"
                     value={defaultBuyIn || ''}
@@ -414,7 +463,7 @@ export default function Settings() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">
-                      Tipo de Valor para Mesa Final
+                      {t('finalTableType')}
                     </label>
                     <div className="flex space-x-4 mb-3">
                       <label className={`flex items-center space-x-2 ${isAdmin ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
@@ -428,7 +477,7 @@ export default function Settings() {
                           className="text-purple-500 focus:ring-purple-500"
                           disabled={!isAdmin}
                         />
-                        <span className="text-gray-300">Porcentagem (%)</span>
+                        <span className="text-gray-300">{t('percentage')}</span>
                       </label>
                       <label className={`flex items-center space-x-2 ${isAdmin ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
                         <input
@@ -441,13 +490,13 @@ export default function Settings() {
                           className="text-purple-500 focus:ring-purple-500"
                           disabled={!isAdmin}
                         />
-                        <span className="text-gray-300">Valor Fixo ($)</span>
+                        <span className="text-gray-300">{t('fixedValue')}</span>
                       </label>
                     </div>
 
                     {finalTableType === 'percentage' ? (
                       <Input
-                        label="% para Mesa Final"
+                        label={t('finalTablePercentage')}
                         type="number"
                         step="1"
                         value={finalTablePercentage || ''}
@@ -459,7 +508,7 @@ export default function Settings() {
                       />
                     ) : (
                       <Input
-                        label="Valor Fixo para Mesa Final ($)"
+                        label={t('fixedValue')}
                         type="number"
                         step="1"
                         value={finalTableFixedValue || ''}
@@ -475,7 +524,7 @@ export default function Settings() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Input
-                    label="Total de Rodadas no Campeonato"
+                    label={t('totalRounds')}
                     type="number"
                     min="1"
                     value={totalRounds || ''}
@@ -486,7 +535,7 @@ export default function Settings() {
                     disabled={!isAdmin}
                   />
                   <Input
-                    label="Top Jogadores para Mesa Final"
+                    label={t('topPlayers')}
                     type="number"
                     min="1"
                     value={finalTableTopPlayers || ''}
@@ -498,10 +547,37 @@ export default function Settings() {
                   />
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Input
+                    label={t('discards')}
+                    type="number"
+                    min="0"
+                    value={discardCount}
+                    onChange={(e) => {
+                      setDiscardCount(parseInt(e.target.value) || 0);
+                      setHasSettingsChanges(true);
+                    }}
+                    disabled={!isAdmin}
+                    placeholder="Ex: 3"
+                  />
+                  <Input
+                    label={t('discardAfterRound')}
+                    type="number"
+                    min="1"
+                    value={discardAfterRound}
+                    onChange={(e) => {
+                      setDiscardAfterRound(parseInt(e.target.value) || 0);
+                      setHasSettingsChanges(true);
+                    }}
+                    disabled={!isAdmin}
+                    placeholder="Ex: 15"
+                  />
+                </div>
+
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <label className="block text-sm font-medium text-gray-300">
-                      Distribuição de Prêmios por Rodada (%)
+                      {t('prizeDistribution')}
                     </label>
                     {isAdmin && (
                       <div className="flex space-x-2">
@@ -519,7 +595,7 @@ export default function Settings() {
                           disabled={prizeDistribution.length === 0}
                         >
                           <X className="w-3 h-3 mr-1" />
-                          Remover
+                          {t('remove')}
                         </Button>
                         <Button
                           variant="secondary"
@@ -530,7 +606,7 @@ export default function Settings() {
                           className="text-xs px-2 py-1 h-auto"
                         >
                           <Plus className="w-3 h-3 mr-1" />
-                          Adicionar
+                          {t('add')}
                         </Button>
                       </div>
                     )}
@@ -558,7 +634,7 @@ export default function Settings() {
                   </div>
 
                   <div className="mt-4 p-3 bg-white/5 rounded-lg border border-white/10 flex justify-between items-center">
-                    <span className="text-sm text-gray-300">Total Distribuído:</span>
+                    <span className="text-sm text-gray-300">{t('total')}:</span>
                     <span className={`text-lg font-bold ${Math.abs(prizeDistribution.reduce((a, b) => a + b, 0) - 100) < 0.1 ? 'text-green-400' : 'text-red-400'}`}>
                       {prizeDistribution.reduce((a, b) => a + b, 0).toFixed(2)}%
                     </span>
@@ -569,17 +645,17 @@ export default function Settings() {
                     </p>
                   )}
                   <p className="text-gray-500 text-xs mt-2">
-                    O valor líquido (após descontar a Mesa Final) será dividido conforme estas porcentagens.
+                    {t('remaining')}
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-3">
-                    Premiação da Mesa Final (%)
+                    {t('finalTablePrize')}
                   </label>
                   <div className="grid grid-cols-5 gap-2">
                     <Input
-                      label="1º"
+                      label={t('firstPlace')}
                       type="number"
                       step="1"
                       value={finalTable1stPercentage || ''}
@@ -590,7 +666,7 @@ export default function Settings() {
                       disabled={!isAdmin}
                     />
                     <Input
-                      label="2º"
+                      label={t('secondPlace')}
                       type="number"
                       step="1"
                       value={finalTable2ndPercentage || ''}
@@ -601,7 +677,7 @@ export default function Settings() {
                       disabled={!isAdmin}
                     />
                     <Input
-                      label="3º"
+                      label={t('thirdPlace')}
                       type="number"
                       step="1"
                       value={finalTable3rdPercentage || ''}
@@ -635,7 +711,7 @@ export default function Settings() {
                     />
                   </div>
                   <p className="text-gray-400 text-sm mt-2">
-                    Total: {(finalTable1stPercentage + finalTable2ndPercentage + finalTable3rdPercentage + finalTable4thPercentage + finalTable5thPercentage).toFixed(2)}%
+                    {t('total')}: {(finalTable1stPercentage + finalTable2ndPercentage + finalTable3rdPercentage + finalTable4thPercentage + finalTable5thPercentage).toFixed(2)}%
                   </p>
                 </div>
               </div>
@@ -647,14 +723,14 @@ export default function Settings() {
           <CardHeader>
             <h3 className="text-xl font-semibold text-white flex items-center gap-2">
               <Coffee className="w-5 h-5 text-purple-400" />
-              Regulamento do Torneio
+              {t('tournamentRules')}
             </h3>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Texto do Regulamento
+                  {t('rulesTextLabel')}
                 </label>
                 <textarea
                   className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed min-h-[200px]"
@@ -663,11 +739,11 @@ export default function Settings() {
                     setRulesText(e.target.value);
                     setHasSettingsChanges(true);
                   }}
-                  placeholder="Digite aqui o regulamento do torneio..."
+                  placeholder="..."
                   disabled={!isAdmin}
                 />
                 <p className="text-gray-400 text-sm mt-2">
-                  Este regulamento estará disponível para consulta de todos os participantes.
+                  {t('rulesAvailableToAll')}
                 </p>
               </div>
 
@@ -675,7 +751,7 @@ export default function Settings() {
                 <div className="flex justify-end">
                   <Button onClick={handleSaveSettings} loading={submittingSettings} disabled={!hasSettingsChanges}>
                     <Save className="w-4 h-4" />
-                    <span>Salvar Configurações</span>
+                    <span>{t('saveSettings')}</span>
                   </Button>
                 </div>
               )}
@@ -687,47 +763,47 @@ export default function Settings() {
           <CardHeader>
             <h3 className="text-xl font-semibold text-white flex items-center gap-2">
               <Clock className="w-5 h-5 text-orange-400" />
-              Calendário de Rodadas
+              {t('roundCalendar')}
             </h3>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <p className="text-gray-400 text-sm">
-                Registre as datas programadas para as rodadas futuras do campeonato.
+                {t('registerScheduledDates')}
               </p>
 
               {isAdmin && (
                 <div className="bg-white/5 border border-white/10 rounded-lg p-3">
                   <h4 className="text-white font-semibold mb-2">
-                    Adicionar Rodada {(schedules?.length || 0) + 1}
+                    {t('addRound')} {(schedules?.length || 0) + 1}
                   </h4>
                   <div className="grid grid-cols-[1fr_1.5fr_auto] gap-2 items-end">
                     <Input
-                      label="Data (dia/mês)"
+                      label={t('dateFormat')}
                       type="text"
                       placeholder="Ex: 15/12"
                       value={scheduleDate}
                       onChange={(e) => setScheduleDate(e.target.value)}
                     />
                     <Input
-                      label="Observações (opcional)"
-                      placeholder="Ex: Final de ano"
+                      label={`${t('observations')} (${t('optional')})`}
+                      placeholder="..."
                       value={scheduleNotes}
                       onChange={(e) => setScheduleNotes(e.target.value)}
                     />
                     <Button variant="secondary" onClick={handleAddSchedule} className="mb-0">
                       <Plus className="w-4 h-4" />
-                      <span>Adicionar</span>
+                      <span>{t('add')}</span>
                     </Button>
                   </div>
                 </div>
               )}
 
               <div>
-                <h4 className="text-white font-semibold mb-3">Rodadas Programadas</h4>
+                <h4 className="text-white font-semibold mb-3">{t('scheduledRounds')}</h4>
                 {!schedules || schedules.length === 0 ? (
                   <div className="text-gray-400 text-sm text-center py-8">
-                    Nenhuma rodada programada ainda.
+                    {t('noScheduledRounds')}
                   </div>
                 ) : (
                   <div className="grid grid-cols-7 gap-1">
@@ -761,13 +837,13 @@ export default function Settings() {
               <div className="mt-6 pt-6 border-t border-white/20">
                 <h4 className="text-white font-semibold mb-3 flex items-center gap-2">
                   <Trophy className="w-5 h-5 text-yellow-400" />
-                  Mesa Final
+                  {t('finalTableSection')}
                 </h4>
 
                 <div className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border border-yellow-500/30 rounded-lg p-3">
                   <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
                     <Input
-                      label="Data da Mesa Final"
+                      label={t('finalTableDateLabel')}
                       type="text"
                       placeholder="Ex: 20/12"
                       value={finalTableDate}
@@ -787,23 +863,21 @@ export default function Settings() {
                             : ''
                             }`}
                           disabled={(rounds?.filter(r => r.status === 'completed' && !r.is_final_table).length || 0) < (tournamentSettings?.total_rounds || 24)}
-                          title={(rounds?.filter(r => r.status === 'completed' && !r.is_final_table).length || 0) < (tournamentSettings?.total_rounds || 24)
-                            ? `Ainda existem rodadas pendentes. Complete todas as ${tournamentSettings?.total_rounds || 24} rodadas.`
-                            : 'Gerar Mesa Final'}
+                          title={t('generateFinalTable')}
                         >
                           <Trophy className="w-4 h-4" />
-                          <span>Gerar Mesa Final</span>
+                          <span>{t('generateFinalTable')}</span>
                         </Button>
                         {(rounds?.filter(r => r.status === 'completed' && !r.is_final_table).length || 0) < (tournamentSettings?.total_rounds || 24) && (
                           <span className="text-red-400 text-xs mt-1">
-                            Complete todas as rodadas primeiro
+                            {t('completeAllRoundsFirst')}
                           </span>
                         )}
                       </div>
                     )}
                   </div>
                   <p className="text-yellow-200 text-xs mt-2">
-                    Gera automaticamente uma rodada especial com os {tournamentSettings?.final_table_top_players || 9} melhores jogadores do ranking.
+                    {t('autoGeneratesWithTop').replace('{count}', String(tournamentSettings?.final_table_top_players || 9))}
                   </p>
                 </div>
               </div>
@@ -817,12 +891,12 @@ export default function Settings() {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <Clock className="w-6 h-6 text-purple-400" />
-                <h3 className="text-xl font-semibold text-white">Estrutura do Torneio</h3>
+                <h3 className="text-xl font-semibold text-white">{t('tournamentStructure')}</h3>
               </div>
               {isAdmin && (
                 <Button onClick={handleSaveSettings} loading={submittingSettings} disabled={!hasSettingsChanges}>
                   <Save className="w-4 h-4" />
-                  <span>Salvar</span>
+                  <span>{t('save')}</span>
                 </Button>
               )}
             </div>
@@ -833,12 +907,12 @@ export default function Settings() {
                 <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
               </div>
             ) : settingsError ? (
-              <p className="text-center text-red-400 py-12">Erro ao carregar configurações</p>
+              <p className="text-center text-red-400 py-12">{t('error')}</p>
             ) : (
               <div className="space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-3">
-                    Duração dos Níveis de Blinds
+                    {t('blindLevelsDurationTitle')}
                   </label>
                   <div className="grid grid-cols-3 gap-3">
                     {[10, 15, 20].map((duration) => (
@@ -856,7 +930,7 @@ export default function Settings() {
                           } ${!isAdmin ? 'cursor-not-allowed opacity-60' : ''}`}
                       >
                         <div className="font-semibold text-lg">{duration} min</div>
-                        <div className="text-xs mt-1">por nível</div>
+                        <div className="text-xs mt-1">{t('perLevel')}</div>
                       </button>
                     ))}
                   </div>
@@ -864,12 +938,12 @@ export default function Settings() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Níveis de Blinds
+                    {t('blindLevels')}
                   </label>
                   <p className="text-gray-400 text-sm mb-3">
-                    Digite os valores dos blinds separados por vírgula. Use "BREAK" ou "INTERVALO" para intervalos.
+                    {t('blindLevelsDescription')}
                     <br />
-                    Exemplo: 100/200,200/400,BREAK,400/800,800/1600
+                    {t('example')}: 100/200,200/400,BREAK,400/800,800/1600
                   </p>
                   <textarea
                     value={blindLevels}
@@ -883,27 +957,62 @@ export default function Settings() {
                   />
                   {blindLevels && (
                     <div className="mt-4 p-4 bg-white/5 rounded-lg">
-                      <div className="text-sm font-medium text-gray-300 mb-2 flex items-center space-x-2">
-                        <Coins className="w-4 h-4" />
-                        <span>Preview dos Níveis:</span>
+                      <div className="text-sm font-medium text-gray-300 mb-3 flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <Coins className="w-4 h-4" />
+                          <span>{t('levelPreview')}:</span>
+                        </div>
+                        <span className="text-xs text-gray-400">{t('durationEditablePerLevel')}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                         {blindLevels.split(',').map((level, index) => {
                           const isBreak = isBreakLevel(level);
                           return (
                             <div
                               key={index}
-                              className={`px-3 py-2 rounded text-sm font-mono ${isBreak
-                                ? 'bg-orange-500/20 text-orange-300 border border-orange-500/50'
-                                : 'bg-white/5 text-white'
+                              className={`flex items-center justify-between p-3 rounded border ${isBreak
+                                ? 'bg-orange-500/10 border-orange-500/30'
+                                : 'bg-white/5 border-white/10'
                                 }`}
                             >
-                              {isBreak && <Coffee className="w-3 h-3 inline mr-1" />}
-                              Nível {index + 1}: {level.trim()}
+                              <div className="flex items-center space-x-2 flex-1">
+                                {isBreak && <Coffee className="w-4 h-4 text-orange-400" />}
+                                <div>
+                                  <div className={`text-sm font-semibold ${isBreak ? 'text-orange-300' : 'text-white'}`}>
+                                    {t('level')} {index + 1}
+                                  </div>
+                                  <div className={`text-xs font-mono ${isBreak ? 'text-orange-200' : 'text-gray-300'}`}>
+                                    {level.trim()}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  max="60"
+                                  value={levelDurations[index] ?? blindDuration}
+                                  onChange={(e) => {
+                                    const newDuration = parseInt(e.target.value) || blindDuration;
+                                    setLevelDurations(prev => ({
+                                      ...prev,
+                                      [index]: newDuration
+                                    }));
+                                    setHasSettingsChanges(true);
+                                  }}
+                                  className="w-16 px-2 py-1 bg-black/30 border border-white/20 rounded text-white text-sm text-center focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                  disabled={!isAdmin}
+                                  title="Duração deste nível em minutos"
+                                />
+                                <span className="text-xs text-gray-400">min</span>
+                              </div>
                             </div>
                           );
                         })}
                       </div>
+                      <p className="text-xs text-gray-500 mt-3">
+                        💡 {t('tipCustomDuration')}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -917,20 +1026,20 @@ export default function Settings() {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-3">
                 <Trophy className="w-6 h-6 text-yellow-400" />
-                <h3 className="text-xl font-semibold text-white">Pontuação por Posição</h3>
+                <h3 className="text-xl font-semibold text-white">{t('scoringByPosition')}</h3>
               </div>
               {isAdmin && (
                 <div className="flex space-x-3">
                   <Button variant="secondary" onClick={handleAddPosition}>
                     <Plus className="w-4 h-4" />
-                    <span>Adicionar Posição</span>
+                    <span>{t('addPosition')}</span>
                   </Button>
-                  <Button variant="secondary" onClick={handleRestoreDefaults} title="Restaurar Padrões">
+                  <Button variant="secondary" onClick={handleRestoreDefaults} title={t('restoreDefaults')}>
                     <RotateCcw className="w-4 h-4" />
                   </Button>
                   <Button onClick={handleSaveRules} loading={submittingRules} disabled={!hasRulesChanges}>
                     <Save className="w-4 h-4" />
-                    <span>Salvar</span>
+                    <span>{t('save')}</span>
                   </Button>
                 </div>
               )}
@@ -942,16 +1051,16 @@ export default function Settings() {
                 <Loader2 className="w-8 h-8 animate-spin text-purple-400" />
               </div>
             ) : rulesError ? (
-              <p className="text-center text-red-400 py-12">Erro ao carregar regras</p>
+              <p className="text-center text-red-400 py-12">{t('error')}</p>
             ) : (
               <div className="space-y-4">
                 <p className="text-gray-400 text-sm">
-                  Defina quantos pontos cada posição receberá. A partir da 13ª posição, todos recebem 5 pontos de participação.
+                  {t('scoringDescription')}
                 </p>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   {editingRules.map((rule, index) => (
                     <div key={index} className="flex items-center space-x-3">
-                      <span className="text-gray-400 font-semibold w-16">{rule.position}º lugar</span>
+                      <span className="text-gray-400 font-semibold w-16">{rule.position}º {t('place')}</span>
                       <Input
                         type="number"
                         value={rule.points || ''}
@@ -970,11 +1079,98 @@ export default function Settings() {
           </CardContent>
         </Card>
 
+        {/* Admin Management Section */}
+        {isAdmin && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center space-x-3">
+                <Shield className="w-6 h-6 text-orange-400" />
+                <h3 className="text-xl font-semibold text-white">{t('tournamentAdmins')}</h3>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <p className="text-gray-400 text-sm">
+                  {t('addAdminsDescription')}
+                </p>
+
+                {!members || members.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400">
+                    <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
+                    {t('loadingMembers')}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {members.map((member) => (
+                      <div
+                        key={member.user_id}
+                        className={`flex items-center justify-between p-4 rounded-lg border ${
+                          member.role === 'admin'
+                            ? 'bg-orange-500/10 border-orange-500/30'
+                            : 'bg-white/5 border-white/10'
+                        }`}
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                            member.role === 'admin'
+                              ? 'bg-orange-500/20 text-orange-400'
+                              : 'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {member.role === 'admin' ? (
+                              <ShieldCheck className="w-5 h-5" />
+                            ) : (
+                              <Users className="w-5 h-5" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-white font-medium">{member.name}</div>
+                            <div className="text-gray-400 text-sm">{member.email}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            member.role === 'admin'
+                              ? 'bg-orange-500/20 text-orange-300'
+                              : 'bg-gray-500/20 text-gray-400'
+                          }`}>
+                            {member.role === 'admin' ? t('admin') : t('playerRole')}
+                          </span>
+                          <button
+                            onClick={() => handleToggleAdmin(member.user_id, member.role)}
+                            disabled={updatingRole === member.user_id}
+                            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+                              member.role === 'admin'
+                                ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20 border border-red-500/20'
+                                : 'bg-green-500/10 text-green-400 hover:bg-green-500/20 border border-green-500/20'
+                            } disabled:opacity-50`}
+                          >
+                            {updatingRole === member.user_id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : member.role === 'admin' ? (
+                              t('removeAdmin')
+                            ) : (
+                              t('makeAdmin')
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p className="text-gray-500 text-xs mt-4">
+                  💡 {t('onlyRegisteredPlayers')}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <div className="flex items-center space-x-3">
               <Users className="w-6 h-6 text-blue-400" />
-              <h3 className="text-xl font-semibold text-white">Gestão de Jogadores</h3>
+              <h3 className="text-xl font-semibold text-white">{t('playerManagement')}</h3>
             </div>
           </CardHeader>
           <CardContent>
@@ -984,37 +1180,30 @@ export default function Settings() {
 
         <Card>
           <CardHeader>
-            <h3 className="text-xl font-semibold text-white">Sobre o Sistema</h3>
+            <h3 className="text-xl font-semibold text-white">{t('aboutTheSystem')}</h3>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <h4 className="text-white font-medium mb-2">Como Funciona</h4>
+              <h4 className="text-white font-medium mb-2">{t('howItWorksTitle')}</h4>
               <ul className="text-gray-400 space-y-2 text-sm">
-                <li>• Cadastre os jogadores que participarão do campeonato</li>
-                <li>• Configure a estrutura do torneio (níveis de blinds, intervalos e duração)</li>
-                <li>• Configure os prêmios e a mesa final</li>
-                <li>• Defina as regras de pontuação por posição</li>
-                <li>• Crie rodadas na aba "Rodadas" e selecione os jogadores</li>
-                <li>• Use a tela "Ao Vivo" para acompanhar o jogo em tempo real</li>
-                <li>• O sistema calcula automaticamente os prêmios e a mesa final</li>
-                <li>• O ranking é atualizado em tempo real após cada rodada</li>
+                {t('howItWorksItems').split('|').map((item, idx) => (
+                  <li key={idx}>• {item}</li>
+                ))}
               </ul>
             </div>
             <div>
-              <h4 className="text-white font-medium mb-2">Sistema de Premiação</h4>
+              <h4 className="text-white font-medium mb-2">{t('prizeSystemTitle')}</h4>
               <p className="text-gray-400 text-sm">
-                {finalTableType === 'percentage'
-                  ? `${finalTablePercentage.toFixed(0)}% de cada buy-in`
-                  : `$${finalTableFixedValue.toFixed(0)} por rodada`} vai para o prêmio da mesa final.
-                Os {finalTableTopPlayers} melhores jogadores após {totalRounds} rodadas disputam a mesa final.
-                O restante é distribuído em cada rodada conforme as porcentagens definidas acima.
+                {t('prizeSystemDesc')
+                  .replace('{percentage}', finalTableType === 'percentage' ? finalTablePercentage.toFixed(0) : finalTableFixedValue.toFixed(0))
+                  .replace('{players}', String(finalTableTopPlayers))
+                  .replace('{rounds}', String(totalRounds))}
               </p>
             </div>
             <div>
-              <h4 className="text-white font-medium mb-2">Critérios de Desempate</h4>
+              <h4 className="text-white font-medium mb-2">{t('tiebreakTitle')}</h4>
               <p className="text-gray-400 text-sm">
-                Em caso de empate nos pontos, o desempate é feito por: melhor posição alcançada,
-                seguido pelo número de rodadas jogadas.
+                {t('tiebreakDesc')}
               </p>
             </div>
           </CardContent>

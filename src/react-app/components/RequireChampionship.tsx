@@ -1,6 +1,6 @@
 import { useAuth } from '@/react-app/contexts/AuthContext';
 import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
-import { useLocation } from 'react-router';
+import { useLocation, Navigate } from 'react-router';
 import ChampionshipSelector from '@/react-app/pages/ChampionshipSelector';
 
 export default function RequireChampionship({ children }: { children: React.ReactNode }) {
@@ -8,17 +8,16 @@ export default function RequireChampionship({ children }: { children: React.Reac
     const { currentChampionship, loading } = useChampionship();
     const location = useLocation();
 
-    // Don't require championship for login/register/welcome/quick-setup pages
+    // Don't require championship for login/register/quick-setup pages
     if (location.pathname === '/login' ||
         location.pathname === '/register' ||
-        location.pathname === '/welcome' ||
         location.pathname === '/quick-setup') {
         return <>{children}</>;
     }
 
-    // If not logged in, show children (will redirect to login)
+    // If not logged in, redirect to login page
     if (!user) {
-        return <>{children}</>;
+        return <Navigate to="/login" replace />;
     }
 
     // If loading, show nothing (or a loader)

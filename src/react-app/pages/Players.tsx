@@ -90,7 +90,7 @@ export default function Players() {
             <h2 className="text-3xl font-bold text-white">Jogadores</h2>
             <p className="text-gray-400 mt-1">Gerencie os participantes do campeonato</p>
           </div>
-          {!showForm && (
+          {isAdmin && !showForm && (
             <Button onClick={() => setShowForm(true)}>
               <UserPlus className="w-4 h-4" />
               <span>Adicionar Jogador</span>

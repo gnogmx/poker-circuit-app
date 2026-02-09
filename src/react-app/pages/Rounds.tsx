@@ -7,10 +7,12 @@ import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Plus, Trash2, Loader2, X, Calendar, DollarSign, Radio, Trophy, Users, RefreshCw } from 'lucide-react';
+import { Plus, Trash2, Loader2, X, Calendar, DollarSign, Radio, Trophy, Users, RefreshCw, Shuffle } from 'lucide-react';
 import ChampionshipPodiumModal from '@/react-app/components/ChampionshipPodiumModal';
 import FinalTableModal from '@/react-app/components/FinalTableModal';
 import ConfirmationModal from '@/react-app/components/ConfirmationModal';
+import TableDrawModal from '@/react-app/components/TableDrawModal';
+import { useLanguage } from '@/react-app/hooks/useLanguage';
 
 type RoundType = 'regular' | 'freezeout' | 'knockout';
 
@@ -27,6 +29,7 @@ export default function Rounds() {
   const { data: players, loading: loadingPlayers } = useApi<Player[]>('/api/players');
   const { data: rankingData } = useApi<RankingResponse>('/api/rankings');
   const { data: settings } = useApi<TournamentSettings>('/api/tournament-settings');
+  const { t } = useLanguage();
 
   // Redirect if single tournament - rounds not available
   useEffect(() => {
@@ -64,6 +67,9 @@ export default function Rounds() {
   // Modal states
   const [showPodiumModal, setShowPodiumModal] = useState(false);
   const [showFinalTableModal, setShowFinalTableModal] = useState(false);
+  const [showTableDrawModal, setShowTableDrawModal] = useState(false);
+  const [tableDrawPlayers, setTableDrawPlayers] = useState<Array<{ id: number; name: string }>>([]);
+  const [tableDrawRoundId, setTableDrawRoundId] = useState<number | undefined>(undefined);
 
   // Check for championship completion
   useEffect(() => {
@@ -145,7 +151,8 @@ export default function Rounds() {
       setSelectedPlayers(new Set());
       setShowForm(false);
       refreshRounds();
-      alert('Rodada criada! Acesse a aba "Ao Vivo" para iniciar o jogo.');
+      // Navigate to live page automatically
+      navigate('/live');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao salvar rodada';
       alert(message);
@@ -211,15 +218,6 @@ export default function Rounds() {
     });
   };
 
-  const handleDeleteRequest = (roundId: number) => {
-    setConfirmModal({
-      isOpen: true,
-      title: 'Excluir Rodada',
-      message: 'Tem certeza que deseja excluir esta rodada? Esta ação não pode ser desfeita.',
-      onConfirm: () => handleDelete(roundId)
-    });
-  };
-
   const handleReplacePlayer = async (roundId: number, playerIdToRemove: number) => {
     setConfirmModal(prev => ({ ...prev, isOpen: false }));
     try {
@@ -256,9 +254,9 @@ export default function Rounds() {
 
   const getRoundTypeLabel = (type: string) => {
     switch (type) {
-      case 'regular': return 'Regular';
-      case 'freezeout': return 'Freeze Out';
-      case 'knockout': return 'Knockout';
+      case 'regular': return t('regular');
+      case 'freezeout': return t('freezeout');
+      case 'knockout': return t('knockout');
       default: return type;
     }
   };
@@ -270,7 +268,7 @@ export default function Rounds() {
     <Layout>
       <div className="space-y-6">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-white">Rodadas</h2>
+          <h2 className="text-2xl font-bold text-white">{t('rounds')}</h2>
           <div className="flex gap-2">
             {isAdmin && !showForm && !activeRound && !rounds?.find(r => r.status === 'upcoming') && (
               <>
@@ -297,7 +295,7 @@ export default function Rounds() {
                 ) : (
                   <Button onClick={() => setShowForm(true)}>
                     <Plus className="w-4 h-4 mr-2" />
-                    Nova Rodada
+                    {t('newRound')}
                   </Button>
                 )}
               </>
@@ -313,22 +311,43 @@ export default function Rounds() {
                   <div className="flex items-center space-x-4">
                     <Radio className="w-6 h-6 text-green-400 animate-pulse" />
                     <h3 className="text-xl font-semibold text-white">
-                      Rodada {activeRound.round_number} - Em Andamento
+                      {t('roundNumber')} {activeRound.round_number} - {t('inProgress')}
                     </h3>
                     <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-300">
                       {getRoundTypeLabel(activeRound.round_type)}
                     </span>
                   </div>
                   <p className="text-gray-300 text-sm">
-                    Acesse a aba "Ao Vivo" para acompanhar e controlar esta rodada
+                    {t('accessLive')}
                   </p>
                 </div>
-                <button
-                  onClick={() => handleDelete(activeRound.id)}
-                  className="text-gray-400 hover:text-red-400 transition-colors"
-                >
-                  <Trash2 className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-3">
+                  {/* Table draw button visible to all */}
+                  {activeRound.players && activeRound.players.length > 0 && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        if (activeRound.players) {
+                          setTableDrawPlayers(activeRound.players);
+                          setTableDrawRoundId(activeRound.id);
+                          setShowTableDrawModal(true);
+                        }
+                      }}
+                      className="bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 border-yellow-500/50"
+                    >
+                      <Shuffle className="w-4 h-4 mr-2" />
+                      Sortear Mesas
+                    </Button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleDelete(activeRound.id)}
+                      className="text-gray-400 hover:text-red-400 transition-colors"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </CardHeader>
           </Card>
@@ -354,6 +373,22 @@ export default function Rounds() {
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
+                  {/* Table draw button visible to all */}
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const round = rounds.find(r => r.status === 'upcoming');
+                      if (round?.players) {
+                        setTableDrawPlayers(round.players);
+                        setTableDrawRoundId(round.id);
+                        setShowTableDrawModal(true);
+                      }
+                    }}
+                    className="bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 border-yellow-500/50"
+                  >
+                    <Shuffle className="w-4 h-4 mr-2" />
+                    Sortear Mesas
+                  </Button>
                   {isAdmin && (
                     <>
                       <Button
@@ -404,7 +439,7 @@ export default function Rounds() {
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
-                <h3 className="text-xl font-semibold text-white">Nova Rodada</h3>
+                <h3 className="text-xl font-semibold text-white">{t('newRound')}</h3>
                 <button onClick={handleCancel} className="text-gray-400 hover:text-white">
                   <X className="w-5 h-5" />
                 </button>
@@ -413,15 +448,20 @@ export default function Rounds() {
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-4">
-                  <div className="p-4 bg-purple-500/10 rounded-lg border border-purple-500/30">
-                    <div className="text-sm text-gray-300 mb-1">Número da Rodada</div>
+                  <div className={`p-4 rounded-lg border ${formData.round_type === 'regular'
+                      ? 'bg-purple-500/10 border-purple-500/30'
+                      : formData.round_type === 'freezeout'
+                        ? 'bg-blue-500/10 border-blue-500/30'
+                        : 'bg-yellow-500/10 border-yellow-500/30'
+                    }`}>
+                    <div className="text-sm text-gray-300 mb-1">{t('roundNumber')}</div>
                     <div className="text-2xl font-bold text-white">
-                      Rodada {rounds && rounds.length > 0 ? Math.max(...rounds.map(r => r.round_number)) + 1 : 1}
+                      {t('roundNumber')} {rounds && rounds.length > 0 ? Math.max(...rounds.map(r => r.round_number)) + 1 : 1}
                     </div>
                   </div>
 
                   <Input
-                    label="Data"
+                    label={t('date')}
                     type="date"
                     value={formData.round_date}
                     onChange={(e) => setFormData({ ...formData, round_date: e.target.value })}
@@ -431,7 +471,7 @@ export default function Rounds() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Tipo de Rodada
+                    {t('roundType')}
                   </label>
                   <div className="grid grid-cols-3 gap-3">
                     <button
@@ -450,8 +490,8 @@ export default function Rounds() {
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
                         }`}
                     >
-                      <div className="font-semibold">Regular</div>
-                      <div className="text-xs mt-1">Até 2 recompras</div>
+                      <div className="font-semibold">{t('regular')}</div>
+                      <div className="text-xs mt-1">{t('upToRebuys')}</div>
                     </button>
                     <button
                       type="button"
@@ -465,12 +505,12 @@ export default function Rounds() {
                         });
                       }}
                       className={`p-3 rounded-lg border transition-all ${formData.round_type === 'freezeout'
-                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        ? 'bg-blue-500/20 border-blue-500 text-blue-300'
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
                         }`}
                     >
-                      <div className="font-semibold">Freeze Out</div>
-                      <div className="text-xs mt-1">Sem recompra</div>
+                      <div className="font-semibold">{t('freezeout')}</div>
+                      <div className="text-xs mt-1">{t('noRebuy')}</div>
                     </button>
                     <button
                       type="button"
@@ -484,19 +524,19 @@ export default function Rounds() {
                         });
                       }}
                       className={`p-3 rounded-lg border transition-all ${formData.round_type === 'knockout'
-                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        ? 'bg-yellow-500/20 border-yellow-500 text-yellow-300'
                         : 'bg-white/5 border-white/10 text-gray-400 hover:bg-white/10'
                         }`}
                     >
-                      <div className="font-semibold">Knockout</div>
-                      <div className="text-xs mt-1">Bounty por eliminação</div>
+                      <div className="font-semibold">{t('knockout')}</div>
+                      <div className="text-xs mt-1">{t('bountyPerElimination')}</div>
                     </button>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <Input
-                    label="Buy-in ($)"
+                    label={t('buyIn') + " ($)"}
                     type="number"
                     step="1"
                     value={formData.buy_in_value}
@@ -505,7 +545,7 @@ export default function Rounds() {
                   />
                   {formData.round_type === 'regular' && (
                     <Input
-                      label="Recompra ($)"
+                      label={t('rebuy') + " ($)"}
                       type="number"
                       step="1"
                       value={formData.rebuy_value}
@@ -526,16 +566,16 @@ export default function Rounds() {
                 </div>
 
                 <Input
-                  label="Observações (opcional)"
+                  label={`${t('notes')} (${t('optional')})`}
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  placeholder="Adicione observações sobre esta rodada..."
+                  placeholder={t('addNotes')}
                 />
 
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium text-gray-300">
-                      Jogadores Participantes
+                      {t('participatingPlayers')}
                     </label>
                     <div className="flex space-x-2">
                       <button
@@ -560,7 +600,7 @@ export default function Rounds() {
                   </div>
                   {!players || players.length === 0 ? (
                     <div className="text-center py-8 text-gray-400">
-                      Nenhum jogador cadastrado
+                      {t('noPlayersRegistered')}
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -585,17 +625,27 @@ export default function Rounds() {
                   )}
                   {selectedPlayers.size > 0 && (
                     <div className="text-gray-400 text-sm">
-                      {selectedPlayers.size} jogador{selectedPlayers.size !== 1 ? 'es' : ''} selecionado{selectedPlayers.size !== 1 ? 's' : ''}
+                      {selectedPlayers.size} {selectedPlayers.size !== 1 ? t('playersSelected') : t('playerSelected')}
                     </div>
                   )}
                 </div>
 
                 <div className="flex space-x-3">
-                  <Button type="submit" loading={submitting}>
-                    Criar Rodada
+                  <Button
+                    type="submit"
+                    loading={submitting}
+                    className={
+                      formData.round_type === 'regular'
+                        ? 'bg-purple-500 hover:bg-purple-600'
+                        : formData.round_type === 'freezeout'
+                          ? 'bg-blue-500 hover:bg-blue-600'
+                          : 'bg-yellow-500 hover:bg-yellow-600 text-black'
+                    }
+                  >
+                    {t('createRound')}
                   </Button>
                   <Button type="button" variant="secondary" onClick={handleCancel}>
-                    Cancelar
+                    {t('cancel')}
                   </Button>
                 </div>
               </form>
@@ -604,7 +654,7 @@ export default function Rounds() {
         )}
 
         <div className="space-y-4">
-          <h3 className="text-xl font-semibold text-white">Rodadas Finalizadas</h3>
+          <h3 className="text-xl font-semibold text-white">{t('completedRounds')}</h3>
           {loading ? (
             <Card>
               <CardContent className="flex items-center justify-center py-12">
@@ -614,13 +664,13 @@ export default function Rounds() {
           ) : error ? (
             <Card>
               <CardContent className="py-12">
-                <p className="text-center text-red-400">Erro ao carregar rodadas</p>
+                <p className="text-center text-red-400">{t('error')}</p>
               </CardContent>
             </Card>
           ) : completedRounds.length === 0 ? (
             <Card>
               <CardContent className="py-12">
-                <p className="text-center text-gray-400">Nenhuma rodada finalizada ainda</p>
+                <p className="text-center text-gray-400">{t('noCompletedRounds')}</p>
               </CardContent>
             </Card>
           ) : (
@@ -631,9 +681,14 @@ export default function Rounds() {
                     <div className="space-y-2">
                       <div className="flex items-center space-x-4">
                         <h3 className="text-xl font-semibold text-white">
-                          Rodada {round.round_number}
+                          {t('roundNumber')} {round.round_number}
                         </h3>
-                        <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-500/20 text-purple-300">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${round.round_type === 'regular'
+                            ? 'bg-purple-500/20 text-purple-300'
+                            : round.round_type === 'freezeout'
+                              ? 'bg-blue-500/20 text-blue-300'
+                              : 'bg-yellow-500/20 text-yellow-300'
+                          }`}>
                           {getRoundTypeLabel(round.round_type)}
                         </span>
                         <div className="flex items-center space-x-2 text-gray-400">
@@ -647,13 +702,13 @@ export default function Rounds() {
                         {round.buy_in_value && (
                           <div className="flex items-center space-x-1">
                             <DollarSign className="w-3 h-3" />
-                            <span>Buy-in: $ {round.buy_in_value.toFixed(0)}</span>
+                            <span>{t('buyIn')}: $ {round.buy_in_value.toFixed(0)}</span>
                           </div>
                         )}
                         {round.rebuy_value && round.round_type === 'regular' && (
                           <div className="flex items-center space-x-1">
                             <DollarSign className="w-3 h-3" />
-                            <span>Recompra: $ {round.rebuy_value.toFixed(0)}</span>
+                            <span>{t('rebuy')}: $ {round.rebuy_value.toFixed(0)}</span>
                           </div>
                         )}
                         {round.knockout_value && round.round_type === 'knockout' && (
@@ -664,14 +719,7 @@ export default function Rounds() {
                         )}
                       </div>
                     </div>
-                    {isAdmin && (
-                      <button
-                        onClick={() => handleDeleteRequest(round.id)}
-                        className="text-gray-400 hover:text-red-400 transition-colors"
-                      >
-                        <Trash2 className="w-5 h-5" />
-                      </button>
-                    )}
+                    {/* No delete button for completed rounds */}
                   </div>
                   {round.notes && (
                     <p className="text-gray-400 text-sm mt-2">{round.notes}</p>
@@ -682,15 +730,15 @@ export default function Rounds() {
                     <table className="w-full">
                       <thead>
                         <tr className="border-b border-white/10">
-                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-300">Posição</th>
-                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-300">Jogador</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-300">{t('position')}</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-gray-300">{t('player')}</th>
                           {round.round_type === 'regular' && (
-                            <th className="px-4 py-2 text-center text-sm font-semibold text-gray-300">Recompras</th>
+                            <th className="px-4 py-2 text-center text-sm font-semibold text-gray-300">{t('rebuys')}</th>
                           )}
                           {round.round_type === 'knockout' && (
                             <th className="px-4 py-2 text-right text-sm font-semibold text-gray-300">Knockout</th>
                           )}
-                          <th className="px-4 py-2 text-right text-sm font-semibold text-gray-300">Pontos</th>
+                          <th className="px-4 py-2 text-right text-sm font-semibold text-gray-300">{t('points')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -820,6 +868,12 @@ export default function Rounds() {
         title={confirmModal.title}
         message={confirmModal.message}
         variant={confirmModal.variant}
+      />
+      <TableDrawModal
+        isOpen={showTableDrawModal}
+        onClose={() => setShowTableDrawModal(false)}
+        players={tableDrawPlayers}
+        roundId={tableDrawRoundId}
       />
     </Layout>
   );

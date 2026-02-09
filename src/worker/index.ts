@@ -20,7 +20,7 @@ import {
   type TournamentSettings,
   type User,
   type Championship,
-} from "@/shared/types";
+} from "../shared/types";
 
 type Variables = {
   user: User;
@@ -28,7 +28,35 @@ type Variables = {
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-app.use("/*", cors());
+const ALLOWED_ORIGINS = [
+  'https://pokercircuit.app',
+  'https://www.pokercircuit.app',
+  'http://localhost:5173',
+  'http://localhost:3000'
+];
+
+app.use("/*", cors({
+  origin: (origin) => {
+    if (ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.pokercircuit.app')) {
+      return origin;
+    }
+    return ALLOWED_ORIGINS[0]; // Fallback to safe origin
+  },
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Championship-Id'],
+  exposeHeaders: ['Content-Length'],
+  maxAge: 600,
+  credentials: true,
+}));
+
+// Global error handler with CORS
+app.onError((err, c) => {
+  console.error(`${err}`);
+  return c.json({
+    error: err.message,
+    stack: err.stack
+  }, 500);
+});
 
 // Helper function to generate unique championship code
 function generateChampionshipCode(): string {
@@ -356,6 +384,15 @@ app.post("/api/rounds", requireAuth, requireAdmin, zValidator("json", CreateRoun
     data.is_final_table ? 1 : 0
   ).first();
 
+  if (round) {
+    // Ensure new rounds are NOT started and are PAUSED
+    await db.prepare(
+      "UPDATE rounds SET is_started = 0, is_paused = 1 WHERE id = ?"
+    ).bind(round.id).run();
+    round.is_started = 0;
+    round.is_paused = 1;
+  }
+
   if (!round) {
     return c.json({ error: "Failed to create round" }, 500);
   }
@@ -458,9 +495,14 @@ app.delete("/api/rounds/:id", requireAuth, requireAdmin, async (c) => {
   }
 
   // Verify round belongs to championship
-  const round = await db.prepare("SELECT id FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  const round = await db.prepare("SELECT id, status FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
   if (!round) {
     return c.json({ error: "Round not found" }, 404);
+  }
+
+  // Block deletion of completed rounds
+  if (round.status === 'completed') {
+    return c.json({ error: "Não é possível excluir rodadas finalizadas. Apenas rodadas ativas ou pendentes podem ser excluídas." }, 400);
   }
 
   await db.prepare("DELETE FROM round_results WHERE round_id = ?").bind(id).run();
@@ -548,8 +590,8 @@ app.get("/api/rankings", async (c) => {
 
   // Get all completed rounds (excluding final table)
   const rounds = await db.prepare(`
-    SELECT id, round_number, buy_in_value, rebuy_value 
-    FROM rounds 
+    SELECT id, round_number, buy_in_value, rebuy_value, status, is_final_table
+    FROM rounds
     WHERE championship_id = ? AND status = 'completed' AND (is_final_table = 0 OR is_final_table IS NULL)
     ORDER BY round_number
   `).bind(championshipId).all();
@@ -562,22 +604,44 @@ app.get("/api/rankings", async (c) => {
     WHERE r.championship_id = ? AND r.status = 'completed' AND (r.is_final_table = 0 OR r.is_final_table IS NULL)
   `).bind(championshipId).all();
 
-  // Build round-by-round data
+  // Build round-by-round data and apply discard rules
   const roundByRound = (rankings.results as unknown[]).map((ranking: unknown) => {
     const playerResults: { [key: number]: number } = {};
+    const pointsList: number[] = [];
 
-    (allResults.results as unknown[]).forEach((result: unknown) => {
-      const res = result as RoundResult & { round_number: number };
-      const rank = ranking as RankingEntry;
-      if (res.player_id === rank.player_id) {
-        playerResults[res.round_number] = res.points;
+    (allResults.results as unknown[]).forEach((result: any) => {
+      if (result.player_id === (ranking as any).player_id) {
+        playerResults[result.round_number] = result.points;
+        pointsList.push(result.points);
       }
     });
 
+    // Apply discard rules if threshold reached
+    let totalPoints = pointsList.reduce((a, b) => a + b, 0);
+    const discardCount = (settings as any)?.discard_count || 0;
+    const discardAfterRound = (settings as any)?.discard_after_round || 0;
+    const totalCompletedRounds = (rounds.results as any[]).length;
+
+    if (discardCount > 0 && totalCompletedRounds >= discardAfterRound) {
+      const zeroRounds = totalCompletedRounds - pointsList.length;
+      const allPossiblePoints = [...pointsList, ...Array(Math.max(0, zeroRounds)).fill(0)].sort((a, b) => a - b);
+      const discardedPoints = allPossiblePoints.slice(0, discardCount);
+      const discardSum = discardedPoints.reduce((sum, p) => sum + p, 0);
+      totalPoints = Math.max(0, totalPoints - discardSum);
+    }
+
     return {
       ...(ranking as RankingEntry),
+      total_points: totalPoints,
       round_results: playerResults,
     };
+  });
+
+  // Re-sort because total_points was updated in JS
+  (roundByRound as any[]).sort((a, b) => {
+    if (b.total_points !== a.total_points) return b.total_points - a.total_points;
+    if ((a.best_position || 99) !== (b.best_position || 99)) return (a.best_position || 99) - (b.best_position || 99);
+    return b.rounds_played - a.rounds_played;
   });
 
   // Calculate final table prize pool accurately using actual gross
@@ -739,6 +803,17 @@ app.get("/api/tournament-settings", async (c) => {
     settings.prize_distribution = [p1, p2, p3, p4, p5];
   }
 
+  // Parse blind_level_durations JSON
+  if (settings.blind_level_durations) {
+    try {
+      settings.blind_level_durations = JSON.parse(settings.blind_level_durations as string);
+    } catch {
+      settings.blind_level_durations = {};
+    }
+  } else {
+    settings.blind_level_durations = {};
+  }
+
   return c.json(settings);
 });
 
@@ -766,8 +841,8 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
 
   if (existing) {
     const result = await db.prepare(
-      `UPDATE tournament_settings SET 
-        blind_level_duration = ?, 
+      `UPDATE tournament_settings SET
+        blind_level_duration = ?,
         blind_levels = ?,
         default_buy_in = ?,
         final_table_percentage = ?,
@@ -785,7 +860,10 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
         rules_text = ?,
         final_table_date = ?,
         prize_distribution = ?,
-        updated_at = CURRENT_TIMESTAMP 
+        discard_count = ?,
+        discard_after_round = ?,
+        blind_level_durations = ?,
+        updated_at = CURRENT_TIMESTAMP
       WHERE id = ? RETURNING *`
     ).bind(
       data.blind_level_duration,
@@ -806,6 +884,9 @@ app.put("/api/tournament-settings", requireAuth, requireAdmin, zValidator("json"
       data.rules_text ?? null,
       data.final_table_date ?? null,
       data.prize_distribution ? JSON.stringify(data.prize_distribution) : null,
+      data.discard_count ?? 0,
+      data.discard_after_round ?? 0,
+      data.blind_level_durations ? JSON.stringify(data.blind_level_durations) : null,
       existing.id
     ).first();
 
@@ -1003,6 +1084,15 @@ app.post("/api/final-table/generate", requireAuth, requireAdmin, async (c) => {
       null
     ).first();
 
+    if (round) {
+      // Ensure new final table is NOT started and is PAUSED
+      await db.prepare(
+        "UPDATE rounds SET is_started = 0, is_paused = 1 WHERE id = ?"
+      ).bind(round.id).run();
+      round.is_started = 0;
+      round.is_paused = 1;
+    }
+
     if (!round) {
       return c.json({ error: "Failed to create final table" }, 500);
     }
@@ -1045,17 +1135,208 @@ app.post("/api/rounds/:id/start", requireAuth, requireAdmin, async (c) => {
     return c.json({ error: "Round is not active or upcoming" }, 400);
   }
 
+  // Get current timestamp for timer_started_at
+  const now = Date.now();
+  const body = await c.req.json().catch(() => ({})) as { time_remaining_seconds?: number };
+  const initialTime = body.time_remaining_seconds ?? 0;
+
   // If upcoming, set to active
   if (round.status === 'upcoming') {
     await db.prepare(
-      "UPDATE rounds SET status = 'active', is_started = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(id).run();
+      "UPDATE rounds SET status = 'active', is_started = 1, timer_started_at = ?, current_level = 0, is_paused = 0, time_remaining_seconds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(now, initialTime, id).run();
   } else {
     // Just mark as started if already active
     await db.prepare(
-      "UPDATE rounds SET is_started = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).bind(id).run();
+      "UPDATE rounds SET is_started = 1, timer_started_at = ?, current_level = 0, is_paused = 0, time_remaining_seconds = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).bind(now, initialTime, id).run();
   }
+
+  return c.json({ success: true, timer_started_at: now });
+});
+
+// Update timer state (pause/resume/level change)
+app.post("/api/rounds/:id/timer-state", requireAuth, requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const body = await c.req.json() as {
+    is_paused?: boolean;
+    current_level?: number;
+    timer_started_at?: number;
+    time_remaining_seconds?: number;
+  };
+
+  // Verify round belongs to championship
+  const round = await db.prepare("SELECT id, is_started FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  // Build update query based on what's provided
+  const updates: string[] = [];
+  const values: (number | null)[] = [];
+
+  if (body.is_paused !== undefined) {
+    updates.push("is_paused = ?");
+    values.push(body.is_paused ? 1 : 0);
+  }
+
+  if (body.current_level !== undefined) {
+    updates.push("current_level = ?");
+    values.push(body.current_level);
+  }
+
+  if (body.timer_started_at !== undefined) {
+    updates.push("timer_started_at = ?");
+    values.push(body.timer_started_at);
+  }
+
+  if (body.time_remaining_seconds !== undefined) {
+    updates.push("time_remaining_seconds = ?");
+    values.push(body.time_remaining_seconds);
+  }
+
+  if (updates.length > 0) {
+    updates.push("updated_at = CURRENT_TIMESTAMP");
+    const query = `UPDATE rounds SET ${updates.join(", ")} WHERE id = ?`;
+    values.push(parseInt(id));
+    await db.prepare(query).bind(...values).run();
+  }
+
+  return c.json({ success: true });
+});
+
+// Save table draw for a round (only admin can save, but anyone can read)
+app.post("/api/rounds/:id/table-draw", requireAuth, requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const body = await c.req.json() as { table_draw: string };
+
+  // Verify round belongs to championship
+  const round = await db.prepare("SELECT id, table_draw FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  // Only allow saving if no draw exists yet
+  if (round.table_draw) {
+    return c.json({ error: "Table draw already exists for this round", existing_draw: JSON.parse(round.table_draw as string) }, 400);
+  }
+
+  await db.prepare(
+    "UPDATE rounds SET table_draw = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).bind(body.table_draw, id).run();
+
+  return c.json({ success: true, table_draw: JSON.parse(body.table_draw) });
+});
+
+// Get table draw for a round (anyone can read)
+app.get("/api/rounds/:id/table-draw", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const round = await db.prepare("SELECT table_draw FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  if (round.table_draw) {
+    return c.json({ table_draw: JSON.parse(round.table_draw as string) });
+  }
+
+  return c.json({ table_draw: null });
+});
+
+// Save elimination state (admin only)
+app.post("/api/rounds/:id/elimination-state", requireAuth, requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const body = await c.req.json() as { elimination_state: string };
+
+  // Verify round belongs to championship
+  const round = await db.prepare("SELECT id FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  await db.prepare(
+    "UPDATE rounds SET elimination_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+  ).bind(body.elimination_state, id).run();
+
+  return c.json({ success: true });
+});
+
+// Get elimination state (anyone can read)
+app.get("/api/rounds/:id/elimination-state", async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const round = await db.prepare("SELECT elimination_state FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  if (round.elimination_state) {
+    return c.json({ elimination_state: JSON.parse(round.elimination_state as string) });
+  }
+
+  return c.json({ elimination_state: null });
+});
+
+// Remove player from active round (for no-shows)
+app.post("/api/rounds/:id/remove-player", requireAuth, requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param("id");
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const body = await c.req.json() as { player_id: number };
+
+  // Verify round exists and is active
+  const round = await db.prepare("SELECT id, status FROM rounds WHERE id = ? AND championship_id = ?").bind(id, championshipId).first();
+  if (!round) {
+    return c.json({ error: "Round not found" }, 404);
+  }
+
+  if (round.status !== 'active' && round.status !== 'upcoming') {
+    return c.json({ error: "Can only remove players from active or upcoming rounds" }, 400);
+  }
+
+  // Remove player from round_players
+  await db.prepare(
+    "DELETE FROM round_players WHERE round_id = ? AND player_id = ?"
+  ).bind(id, body.player_id).run();
 
   return c.json({ success: true });
 });
@@ -1320,6 +1601,76 @@ app.delete("/api/championships/:id", requireAuth, async (c) => {
   }
 });
 
+
+// Get championship members (for managing admins)
+// Only returns members who are registered players OR the championship creator
+app.get("/api/championships/members", requireAuth, async (c) => {
+  const db = c.env.DB;
+  const championshipId = getChampionshipId(c);
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  // Get the championship creator
+  const championship = await db.prepare(
+    "SELECT created_by FROM championships WHERE id = ?"
+  ).bind(championshipId).first() as { created_by: number } | null;
+
+  // Get members who are either:
+  // 1. The championship creator (always included)
+  // 2. Have a matching player name in the championship
+  const members = await db.prepare(`
+    SELECT DISTINCT cm.id, cm.user_id, cm.role, cm.joined_at, u.name, u.email
+    FROM championship_members cm
+    JOIN users u ON cm.user_id = u.id
+    LEFT JOIN players p ON LOWER(TRIM(p.name)) = LOWER(TRIM(u.name))
+      AND p.championship_id = cm.championship_id
+      AND p.is_active = 1
+    WHERE cm.championship_id = ?
+      AND (
+        cm.user_id = ?
+        OR p.id IS NOT NULL
+      )
+    ORDER BY cm.role DESC, u.name ASC
+  `).bind(championshipId, championship?.created_by || 0).all();
+
+  return c.json(members.results);
+});
+
+// Update member role (admin only)
+app.put("/api/championships/members/:userId/role", requireAuth, requireAdmin, async (c) => {
+  const db = c.env.DB;
+  const targetUserId = parseInt(c.req.param("userId"));
+  const championshipId = getChampionshipId(c);
+  const currentUser = c.get('user');
+
+  if (!championshipId) {
+    return c.json({ error: "Championship ID required" }, 400);
+  }
+
+  const body = await c.req.json() as { role: 'admin' | 'player' };
+
+  // Prevent removing yourself as admin
+  if (targetUserId === currentUser.id && body.role === 'player') {
+    return c.json({ error: "You cannot remove your own admin role" }, 400);
+  }
+
+  // Check if target user is a member
+  const member = await db.prepare(
+    "SELECT id FROM championship_members WHERE championship_id = ? AND user_id = ?"
+  ).bind(championshipId, targetUserId).first();
+
+  if (!member) {
+    return c.json({ error: "User is not a member of this championship" }, 404);
+  }
+
+  await db.prepare(
+    "UPDATE championship_members SET role = ? WHERE championship_id = ? AND user_id = ?"
+  ).bind(body.role, championshipId, targetUserId).run();
+
+  return c.json({ success: true });
+});
 
 app.post("/api/championships/join", requireAuth, zValidator("json", JoinChampionshipSchema), async (c) => {
   const db = c.env.DB;

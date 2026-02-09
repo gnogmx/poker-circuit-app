@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "poker-pro",
+  "name": "poker-circuit-app",
+  "account_id": "fcd41c42ea1a16926748c70947fa0489",
   "main": "./src/worker/index.ts",
   "compatibility_date": "2025-06-17",
   "compatibility_flags": [
@@ -11,13 +12,14 @@
   },
   "upload_source_maps": true,
   "assets": {
+    "directory": "./dist/client",
     "not_found_handling": "single-page-application"
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "019ab366-0df7-7614-b090-8bf1cf70ee5d",
-      "database_id": "c683aae0-dcf8-42cd-9675-873405a2ac81"
+      "database_name": "poker-circuit-app-db",
+      "database_id": "1219dc46-17b1-488a-b56b-60a711d7a3d7"
     }
-  ],
+  ]
 }

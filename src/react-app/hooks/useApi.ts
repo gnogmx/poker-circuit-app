@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, type DependencyList } from 'react';
 
-const API_BASE_URL = import.meta.env.PROD
-  ? 'https://poker-pro.poker-pro-019ab366.workers.dev'
-  : '';
+// In production, the API is served from the same origin (pokercircuit.app)
+// No need for a different base URL - both frontend and API are on the same domain
+const API_BASE_URL = '';
 
 export function useApi<T>(url: string, deps: DependencyList = []) {
   const [data, setData] = useState<T | null>(null);

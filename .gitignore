@@ -45,3 +45,5 @@ lerna-debug.log*
 
 # OS
 Thumbs.db
+poker-circuit-release.keystore
+android/keystore.properties

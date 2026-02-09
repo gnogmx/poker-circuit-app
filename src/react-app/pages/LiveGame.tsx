@@ -1,14 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { useApi, apiRequest } from '@/react-app/hooks/useApi';
 import { useChampionship } from '@/react-app/contexts/ChampionshipContext';
+import { useLanguage } from '@/react-app/hooks/useLanguage';
 import { TournamentSettings } from '@/shared/types';
 import Layout from '@/react-app/components/Layout';
 import Card, { CardHeader, CardContent } from '@/react-app/components/Card';
 import Button from '@/react-app/components/Button';
 import Input from '@/react-app/components/Input';
-import { Play, Pause, ChevronUp, ChevronDown, CheckCircle, Trophy, Users, X, Coffee } from 'lucide-react';
+import { Play, Pause, ChevronUp, ChevronDown, CheckCircle, Trophy, Users, X, Coffee, Shuffle, Trash2 } from 'lucide-react';
 import ConfirmationModal from '@/react-app/components/ConfirmationModal';
+import TableDrawModal from '@/react-app/components/TableDrawModal';
 
 interface GamePlayer {
   id: number;
@@ -32,6 +34,11 @@ interface ActiveRound {
   is_final_table?: number;
   players: Array<{ id: number; name: string }>;
   results: Array<unknown>;
+  // Timer state from server
+  timer_started_at: number | null;
+  current_level: number;
+  is_paused: number;
+  time_remaining_seconds: number;
 }
 
 export default function LiveGame() {
@@ -40,28 +47,32 @@ export default function LiveGame() {
   const { isAdmin, isSingleTournament, currentChampionship } = useChampionship();
   const { data: settings, loading: loadingSettings } = useApi<TournamentSettings>('/api/tournament-settings');
   const { data: prizePool } = useApi<{ final_table_pot: number }>('/api/championships/prize-pool');
+  const { t, language } = useLanguage();
 
   // All hooks must be called before any conditional returns
+  const audioUnlockedRef = useRef(false);
+
   const [gamePlayers, setGamePlayers] = useState<GamePlayer[]>([]);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isPaused, setIsPaused] = useState(true); // Default to paused to prevent jumpy timer before sync
   const [currentLevel, setCurrentLevel] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [blindLevels, setBlindLevels] = useState<string[]>([]);
+  const [levelDurations, setLevelDurations] = useState<Record<number, number>>({});
   const [nextPosition, setNextPosition] = useState(1);
   const [showEliminateDialog, setShowEliminateDialog] = useState(false);
   const [playerToEliminate, setPlayerToEliminate] = useState<GamePlayer | null>(null);
   const [eliminatorId, setEliminatorId] = useState<string>('');
   const [eliminationKnockout, setEliminationKnockout] = useState(0);
   const [completing, setCompleting] = useState(false);
-  const [hasPlayedWarning, setHasPlayedWarning] = useState(false);
-  const [hasPlayedLevelUp, setHasPlayedLevelUp] = useState(false);
   const [isFlashing, setIsFlashing] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [lastTriggeredLevel, setLastTriggeredLevel] = useState<number | null>(null);
   const [showPrizeModal, setShowPrizeModal] = useState(false);
   const [prizeDistribution, setPrizeDistribution] = useState<{
     total: number;
     grossTotal: number;
     finalTableAmount: number;
+    dealerAmount: number;
     totalEntries: number;
     buyInValue: number;
     prizes: Array<{
@@ -71,7 +82,6 @@ export default function LiveGame() {
       position: number;
     }>;
     isFinalTable?: boolean;
-    // Legacy properties removed
   } | null>(null);
 
   const [confirmModal, setConfirmModal] = useState<{
@@ -87,180 +97,510 @@ export default function LiveGame() {
     onConfirm: () => { },
   });
 
+  const [needsAudioActivation, setNeedsAudioActivation] = useState(false);
+  const [showTableDrawModal, setShowTableDrawModal] = useState(false);
+  const [showFinalTableDrawModal, setShowFinalTableDrawModal] = useState(false);
   const intervalRef = useRef<number | null>(null);
-  const warningAudioRef = useRef<HTMLAudioElement | null>(null);
-  const levelUpAudioRef = useRef<HTMLAudioElement | null>(null);
+  // Audio element for jingle (MP3 file - iOS/Android compatible)
+  const jingleAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Debug logs
+  // Global unlock for iOS/Android - Call on ANY interaction
+  const unlockAudio = useCallback(() => {
+    if (audioUnlockedRef.current) return;
+
+    try {
+      // 1. Prime SpeechSynthesis for iOS with a real (but silent) utterance
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(' ');
+        utterance.volume = 0;
+        utterance.rate = 10; // Extra fast
+        window.speechSynthesis.speak(utterance);
+        console.log('🎤 Speech primed');
+      }
+
+      // 2. Unlock Audio using a DUMMY element to avoid messing with jingleAudioRef
+      const dummy = new Audio();
+      dummy.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhAAQACABAAAABkYXRhAgAAAAEA';
+      dummy.muted = true;
+      dummy.play().then(() => {
+        dummy.pause();
+        console.log('🔓 Audio context unlocked via dummy');
+      }).catch(() => { });
+
+      // 3. Just ensure jingle exists and starts loading (NO play/pause here)
+      if (!jingleAudioRef.current) {
+        jingleAudioRef.current = new Audio('/jingle.mp3');
+        jingleAudioRef.current.preload = 'auto';
+      }
+      jingleAudioRef.current.load();
+
+      audioUnlockedRef.current = true;
+    } catch (e) {
+      console.warn('Audio unlock failed', e);
+    }
+  }, []);
+
+  // Get duration for a specific level (uses custom duration if set, otherwise default)
+  const getLevelDuration = useCallback((levelIndex: number) => {
+    const customDuration = levelDurations[levelIndex];
+    if (customDuration !== undefined && customDuration > 0) {
+      return customDuration * 60; // Convert minutes to seconds
+    }
+    return (settings?.blind_level_duration || 15) * 60;
+  }, [levelDurations, settings?.blind_level_duration]);
+
+  // Add global listeners for first interaction
   useEffect(() => {
-    console.log('LiveGame State:', { activeRound, settings, loadingSettings });
-  }, [activeRound, settings, loadingSettings]);
+    const handleInteraction = () => {
+      unlockAudio();
+      setNeedsAudioActivation(false);
+    };
+    window.addEventListener('click', handleInteraction);
+    window.addEventListener('touchstart', handleInteraction);
+    return () => {
+      window.removeEventListener('click', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
+    };
+  }, [unlockAudio]);
 
-  // Early returns AFTER all hooks are declared
+  // Prevent accidental page refresh during active game
+  useEffect(() => {
+    if (!activeRound?.is_started) return;
 
+    // Block F5, Ctrl+R, Cmd+R keyboard shortcuts
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === 'F5' ||
+        (e.ctrlKey && e.key === 'r') ||
+        (e.metaKey && e.key === 'r')
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // Block pull-to-refresh on mobile (touch devices)
+    const handleTouchMove = (e: TouchEvent) => {
+      // Only prevent if at top of page and pulling down
+      if (window.scrollY === 0 && e.touches[0].clientY > 0) {
+        const touch = e.touches[0];
+        const startY = touch.clientY;
+
+        const handleTouchEnd = () => {
+          document.removeEventListener('touchend', handleTouchEnd);
+        };
+
+        // If pulling down from top, prevent default
+        if (startY > 50 && document.documentElement.scrollTop === 0) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('touchmove', handleTouchMove, { passive: false });
+
+    // Add CSS to prevent overscroll/pull-to-refresh
+    document.body.style.overscrollBehavior = 'none';
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.body.style.overscrollBehavior = '';
+    };
+  }, [activeRound?.is_started]);
+
+  // iOS/Mac: Show audio activation prompt when entering a game that's already started
+  useEffect(() => {
+    if (activeRound?.is_started && !audioUnlockedRef.current) {
+      // Show for ANY platform if we're in a started round but audio isn't active
+      setNeedsAudioActivation(true);
+    }
+  }, [activeRound?.is_started]);
+
+  // Sync Timer/Level with Server (Absolute Sync to avoid drift)
+  useEffect(() => {
+    if (activeRound) {
+      // Sync pause state
+      setIsPaused(!!activeRound.is_paused);
+      setCurrentLevel(activeRound.current_level);
+
+      if (activeRound.is_paused) {
+        setTimeRemaining(activeRound.time_remaining_seconds);
+      } else if (activeRound.timer_started_at) {
+        // Calculate remaining time based on absolute start time
+        const elapsedMs = Date.now() - activeRound.timer_started_at;
+        const elapsedSec = Math.floor(elapsedMs / 1000);
+        const remaining = Math.max(0, activeRound.time_remaining_seconds - elapsedSec);
+
+        // Guard: only set remaining if it's not going to trigger a double-level up instantly
+        // If it's already at 0, let the timer interval handle the transition once per level
+        setTimeRemaining(remaining);
+      } else {
+        setTimeRemaining(activeRound.time_remaining_seconds);
+      }
+
+      console.log(`⏱️ Server Sync: Level ${activeRound.current_level}, Time ${activeRound.time_remaining_seconds}, Paused: ${!!activeRound.is_paused}`);
+    }
+  }, [activeRound?.id, activeRound?.timer_started_at, activeRound?.is_paused]);
+
+  useEffect(() => {
+    // Preload jingle
+    if (!jingleAudioRef.current) {
+      jingleAudioRef.current = new Audio('/jingle.mp3');
+      jingleAudioRef.current.preload = 'auto';
+      jingleAudioRef.current.load();
+    }
+
+    const loadVoices = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length > 0) {
+        console.log('✅ Voices loaded:', voices.length);
+      }
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
 
   const safeSpeak = (text: string) => {
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'en-US';
-        utterance.rate = 1.0;
-        window.speechSynthesis.speak(utterance);
-      }
-    } catch (e) {
-      console.error('TTS Error:', e);
-    }
-  };
+    if (!('speechSynthesis' in window)) return;
 
+    window.speechSynthesis.cancel();
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
 
-  const playLevelUpJingle = () => {
-    try {
-      const audioContext = new (window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-      const gainNode = audioContext.createGain();
-      gainNode.connect(audioContext.destination);
+    setTimeout(() => {
+      const voices = window.speechSynthesis.getVoices();
+      const currentLang = language;
 
-      // Pleasant ascending arpeggio: C4 -> E4 -> G4 -> C5 (Major chord)
-      const baseNotes = [
-        { freq: 261.63, time: 0 },     // C4
-        { freq: 329.63, time: 0.15 },  // E4
-        { freq: 392.00, time: 0.30 },  // G4
-        { freq: 523.25, time: 0.45 }   // C5
-      ];
+      let selectedVoice;
+      let voiceLang;
 
-      // Play the jingle 5 times with spacing
-      const repetitions = 5;
-      const repetitionDuration = 0.75; // Each arpeggio takes ~0.6s, add gap
-
-      for (let rep = 0; rep < repetitions; rep++) {
-        const startTime = rep * repetitionDuration;
-
-        baseNotes.forEach(note => {
-          const oscillator = audioContext.createOscillator();
-          oscillator.type = 'sine'; // Smooth, pleasant tone
-          oscillator.frequency.setValueAtTime(note.freq, audioContext.currentTime + startTime + note.time);
-
-          const noteGain = audioContext.createGain();
-          noteGain.gain.setValueAtTime(0, audioContext.currentTime + startTime + note.time);
-          noteGain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + startTime + note.time + 0.05);
-          noteGain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + startTime + note.time + 0.4);
-
-          oscillator.connect(noteGain);
-          noteGain.connect(gainNode);
-
-          oscillator.start(audioContext.currentTime + startTime + note.time);
-          oscillator.stop(audioContext.currentTime + startTime + note.time + 0.4);
-        });
+      if (currentLang === 'pt') {
+        selectedVoice = voices.find(v => v.name.toLowerCase().includes('felipe')) ||
+          voices.find(v => v.name.toLowerCase().includes('luciana')) ||
+          voices.find(v => v.lang.startsWith('pt'));
+        voiceLang = 'pt-BR';
+      } else if (currentLang === 'es') {
+        selectedVoice = voices.find(v => v.name.toLowerCase().includes('paulina')) ||
+          voices.find(v => v.name.toLowerCase().includes('monica')) ||
+          voices.find(v => v.lang.startsWith('es'));
+        voiceLang = 'es-ES';
+      } else {
+        selectedVoice = voices.find(v => v.name.toLowerCase().includes('samantha')) ||
+          voices.find(v => v.name.toLowerCase().includes('alex')) ||
+          voices.find(v => v.lang.startsWith('en'));
+        voiceLang = 'en-US';
       }
 
-      // Clean up after all repetitions complete
-      setTimeout(() => {
-        audioContext.close();
-      }, (repetitions * repetitionDuration + 0.5) * 1000);
-    } catch (e) {
-      console.error('Web Audio Error:', e);
-    }
+      if (!selectedVoice) {
+        selectedVoice = voices.find(v => v.lang.startsWith(voiceLang.split('-')[0]));
+      }
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      if (selectedVoice) utterance.voice = selectedVoice;
+      utterance.lang = voiceLang;
+      utterance.rate = 1.0;
+
+      console.log(`%c 🎤 TTS (${voiceLang}): "${text}"`, 'color: #00ff00; font-size: 14px; font-weight: bold;');
+      window.speechSynthesis.speak(utterance);
+    }, 100);
   };
 
+  const playLevelUpJingle = (onPlay?: () => void): Promise<void> => {
+    return new Promise((resolve) => {
+      try {
+        if (!jingleAudioRef.current) {
+          jingleAudioRef.current = new Audio('/jingle.mp3');
+          jingleAudioRef.current.preload = 'auto';
+        }
 
+        const audio = jingleAudioRef.current;
+        audio.currentTime = 0;
+        audio.volume = 1.0;
 
-  useEffect(() => {
-    // Create audio elements for alerts
-    warningAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LajDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9j0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
-    levelUpAudioRef.current = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZRBAMTJ7i7bNiHQU7k9n0yoIsBS+Ax/LajDcIGmi96+ebSw8MTp/k7bFhHAU7ktj0zIQrBCyAy/Lbhj0IGmi76+iaUhELTaDk7bNiHQU+ktf0y4MtBCt/x/LciDkHGWi+6+maTBEMT5/l7LJjHQQ/ktj0yoMrBSuAyPLbhj0IF2i76+iaTRELUKDl7bFhHAU7k9j0yoQrBCx/xvLdiDkHGGi+6+maUhEMTZ/k7bFiHQU7k9j0yoMsBCuAx/LbiDkHGGi+6+maTBEMTZ/k7bNiHQU6k9f0yoMtBCuAx/LciDgHGGi+6+maTBEMTp/l7LJiHQU7k9j0yoMrBSuAyPLbhj0IF2i76+mZTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7bNiHQU/k9j0yoMrBSuAx/LciDgHGGi+6+maTBEMT5/k7Q==');
-  }, []);
+        let hasTriggeredPlay = false;
+        let checkSyncInterval: number | null = null;
+
+        const triggerPlay = () => {
+          if (hasTriggeredPlay) return;
+          hasTriggeredPlay = true;
+          console.log('🎵 Jingle audible start detected');
+          if (onPlay) onPlay();
+          if (checkSyncInterval) {
+            window.clearInterval(checkSyncInterval);
+            checkSyncInterval = null;
+          }
+        };
+
+        const handleEnded = () => {
+          cleanup();
+          resolve();
+        };
+
+        const handleError = (e: any) => {
+          console.error('Jingle play error:', e);
+          cleanup();
+          resolve();
+        };
+
+        const cleanup = () => {
+          if (checkSyncInterval) {
+            window.clearInterval(checkSyncInterval);
+            checkSyncInterval = null;
+          }
+          audio.removeEventListener('playing', triggerPlay);
+          audio.removeEventListener('timeupdate', checkTime);
+          audio.removeEventListener('ended', handleEnded);
+          audio.removeEventListener('error', handleError);
+        };
+
+        const checkTime = () => {
+          if (audio.currentTime > 0.01) {
+            triggerPlay();
+          }
+        };
+
+        audio.addEventListener('playing', triggerPlay);
+        audio.addEventListener('timeupdate', checkTime);
+        audio.addEventListener('ended', handleEnded);
+        audio.addEventListener('error', handleError);
+
+        checkSyncInterval = window.setInterval(() => {
+          if (audio.currentTime > 0) {
+            triggerPlay();
+          }
+        }, 32);
+
+        console.log('🎵 Requesting jingle play...');
+        const playPromise = audio.play();
+
+        if (playPromise !== undefined) {
+          playPromise.catch(error => {
+            console.error('Jingle play rejected:', error);
+            // Fallback: If audio fails, still trigger the visual effect
+            if (onPlay) onPlay();
+            cleanup();
+            resolve();
+          });
+        }
+
+        setTimeout(() => {
+          if (!hasTriggeredPlay) triggerPlay();
+          cleanup();
+          resolve();
+        }, 5000);
+      } catch (e) {
+        console.error('Jingle error:', e);
+        resolve();
+      }
+    });
+  };
 
   useEffect(() => {
     if (settings) {
       const levels = settings.blind_levels.split(',').map(l => l.trim());
       setBlindLevels(levels);
-      setTimeRemaining(settings.blind_level_duration * 60);
+
+      // Load custom level durations
+      if (settings.blind_level_durations) {
+        const durations = typeof settings.blind_level_durations === 'string'
+          ? JSON.parse(settings.blind_level_durations)
+          : settings.blind_level_durations;
+        // Convert string keys to numbers
+        const parsedDurations: Record<number, number> = {};
+        Object.entries(durations || {}).forEach(([key, value]) => {
+          parsedDurations[parseInt(key)] = value as number;
+        });
+        setLevelDurations(parsedDurations);
+      }
+
+      // Only set initial duration if round is not yet started
+      // If started, the server sync effect handles it
+      if (!activeRound?.is_started) {
+        // Use custom duration for level 0 if set
+        const level0Duration = (settings.blind_level_durations as Record<number, number> | undefined)?.[0]
+          || settings.blind_level_duration;
+        setTimeRemaining(level0Duration * 60);
+      }
     }
-  }, [settings]);
+  }, [settings, activeRound?.is_started]);
+
+  // Load elimination state from server
+  const loadEliminationState = useCallback(async () => {
+    if (!activeRound?.id) return;
+    try {
+      const response = await apiRequest(`/api/rounds/${activeRound.id}/elimination-state`) as { elimination_state: GamePlayer[] | null };
+      if (response.elimination_state && response.elimination_state.length > 0) {
+        setGamePlayers(response.elimination_state);
+        const activeCount = response.elimination_state.filter(p => p.isActive).length;
+        setNextPosition(activeCount);
+      }
+    } catch (err) {
+      console.error('Failed to load elimination state:', err);
+    }
+  }, [activeRound?.id]);
+
+  // Save elimination state to server (admin only)
+  const saveEliminationState = useCallback(async (players: GamePlayer[]) => {
+    if (!activeRound?.id || !isAdmin) return;
+    try {
+      await apiRequest(`/api/rounds/${activeRound.id}/elimination-state`, {
+        method: 'POST',
+        body: JSON.stringify({ elimination_state: JSON.stringify(players) }),
+      });
+    } catch (err) {
+      console.error('Failed to save elimination state:', err);
+    }
+  }, [activeRound?.id, isAdmin]);
 
   useEffect(() => {
     if (activeRound && activeRound.players && activeRound.players.length > 0) {
-      // Only initialize if gamePlayers is empty or different
       const existingIds = gamePlayers.map(p => p.id).sort().join(',');
       const newIds = activeRound.players.map(p => p.id).sort().join(',');
 
       if (existingIds !== newIds) {
-        const initialPlayers = activeRound.players.map(p => ({
-          id: p.id,
-          name: p.name,
-          position: null,
-          isActive: true,
-          eliminatedAt: null,
-          rebuys: 0,
-          knockout_earnings: 0,
-        }));
-        setGamePlayers(initialPlayers);
-        setNextPosition(initialPlayers.length);
+        // First try to load saved elimination state
+        loadEliminationState().then(() => {
+          // If no saved state or gamePlayers is still empty, initialize with players
+          setGamePlayers(prev => {
+            if (prev.length === 0) {
+              const initialPlayers = activeRound.players.map(p => ({
+                id: p.id,
+                name: p.name,
+                position: null,
+                isActive: true,
+                eliminatedAt: null,
+                rebuys: 0,
+                knockout_earnings: 0,
+              }));
+              setNextPosition(initialPlayers.length);
+              return initialPlayers;
+            }
+            return prev;
+          });
+        });
       }
     }
-  }, [activeRound, gamePlayers.length]);
+  }, [activeRound, gamePlayers.length, loadEliminationState]);
+
+  // Periodically sync elimination state for non-admin users
+  useEffect(() => {
+    if (!activeRound?.id || !activeRound.is_started || isAdmin) return;
+
+    const syncInterval = setInterval(() => {
+      loadEliminationState();
+    }, 5000); // Sync every 5 seconds for non-admin users
+
+    return () => clearInterval(syncInterval);
+  }, [activeRound?.id, activeRound?.is_started, isAdmin, loadEliminationState]);
+
+  const updateTimerState = async (updates: {
+    is_paused?: boolean;
+    current_level?: number;
+    timer_started_at?: number | null;
+    time_remaining_seconds?: number;
+  }) => {
+    if (!activeRound) return;
+    try {
+      await apiRequest(`/api/rounds/${activeRound.id}/timer-state`, {
+        method: 'POST',
+        body: JSON.stringify(updates),
+      });
+      refreshRound();
+    } catch (err) {
+      console.error('Failed to update timer state:', err);
+    }
+  };
+
+  const triggerLevelEffects = useCallback((levelIndex: number, isStart = false) => {
+    // This function only plays the audio/visual effects
+    playLevelUpJingle(() => {
+      setIsFlashing(true);
+      setTimeout(() => setIsFlashing(false), 4000);
+    }).then(() => {
+      const levelText = blindLevels[levelIndex];
+      if (isStart) {
+        let blindMsg = "";
+        if (levelText?.includes('/')) {
+          const parts = levelText.split('/');
+          blindMsg = `${t('ttsSmallBlind')} ${parts[0]}, ${t('ttsBigBlind')} ${parts[1]}`;
+        } else {
+          blindMsg = levelText || "";
+        }
+        const speechText = t('ttsTournamentStarted').replace('{blindInfo}', blindMsg);
+        safeSpeak(speechText);
+      } else {
+        if (isBreakLevel(levelText)) {
+          safeSpeak(t('ttsBreakTime'));
+        } else {
+          const parts = levelText.split('/');
+          if (parts.length === 2) {
+            const small = parts[0].trim();
+            const big = parts[1].trim();
+            const msg = t('ttsBlindsChanged')
+              .replace('{small}', small)
+              .replace('{big}', big);
+            safeSpeak(msg);
+          } else {
+            safeSpeak(levelText);
+          }
+        }
+      }
+    });
+  }, [blindLevels, t]);
 
   useEffect(() => {
     if (activeRound && activeRound.is_started && !isPaused) {
       intervalRef.current = window.setInterval(() => {
         setTimeRemaining((prev) => {
-          // Play jingle and speak at 1 minute remaining
-          if (prev === 60 && !hasPlayedWarning) {
-            playLevelUpJingle();
-            setIsFlashing(true);
-            setTimeout(() => {
-              safeSpeak("Attention players, the blinds will raise in one minute");
-            }, 4000);
-            setTimeout(() => setIsFlashing(false), 4000);
-            setHasPlayedWarning(true);
+          // Warning at 1 minute
+          if (prev === 60 && audioUnlockedRef.current) {
+            playLevelUpJingle(() => {
+              setIsFlashing(true);
+              setTimeout(() => setIsFlashing(false), 4000);
+            }).then(() => {
+              safeSpeak(t('ttsLastMinute'));
+            });
           }
 
-          if (prev <= 1) {
-            // Play level up jingle
-            if (!hasPlayedLevelUp) {
-              playLevelUpJingle();
-              setHasPlayedLevelUp(true);
-            }
-
-            setIsFlashing(true);
-            setTimeout(() => setIsFlashing(false), 4000);
-
-            setCurrentLevel((level) => {
-              const nextLevel = level + 1;
+          if (prev <= 1 && prev !== null) {
+            // Level Up logic
+            if (lastTriggeredLevel !== currentLevel && audioUnlockedRef.current) {
+              setLastTriggeredLevel(currentLevel); // Mark that we fired for THIS level
+              const nextLevel = currentLevel + 1;
               if (nextLevel < blindLevels.length) {
-                setHasPlayedWarning(false);
-                setHasPlayedLevelUp(false);
+                // iOS: Trigger effects FIRST
+                triggerLevelEffects(nextLevel);
 
-                // Speak new level info after jingle
+                setCurrentLevel(nextLevel);
+                const nextTime = getLevelDuration(nextLevel);
+
+                // Check if rebuy deadline passed
                 const nextLevelText = blindLevels[nextLevel];
-                setTimeout(() => {
-                  if (isBreakLevel(nextLevelText)) {
-                    safeSpeak("Attention players, we are now on a break");
-                  } else {
-                    // Try to parse "100/200" format
-                    const parts = nextLevelText.split('/');
-                    if (parts.length === 2) {
-                      const small = parts[0].trim();
-                      const big = parts[1].trim();
-                      safeSpeak(`Attention players, the blinds now have changed. Small blind is ${small} and big blind is ${big}`);
-                    } else {
-                      safeSpeak(`Attention players, the blinds now have changed to ${nextLevelText}`);
-                    }
-                  }
-                }, 4000);
-
-                // Check if we've passed the break level to mark rebuy deadline
                 if (isBreakLevel(nextLevelText) && activeRound && !activeRound.rebuy_deadline_passed) {
                   apiRequest(`/api/rounds/${activeRound.id}/rebuy-deadline`, {
                     method: 'POST',
                   }).then(() => refreshRound());
                 }
 
-                return nextLevel;
+                if (isAdmin) {
+                  updateTimerState({
+                    current_level: nextLevel,
+                    time_remaining_seconds: nextTime,
+                    timer_started_at: Date.now()
+                  });
+                }
+
+                // Return the new time directly to update state immediately
+                // preventing double-trigger/race conditions
+                return nextTime;
               }
-              return level;
-            });
-            return settings ? settings.blind_level_duration * 60 : prev;
+            }
+            // If not triggered (e.g. max level reached), stay at 0
+            return 0;
           }
           return prev - 1;
         });
@@ -277,66 +617,34 @@ export default function LiveGame() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [activeRound, isPaused, settings, blindLevels, hasPlayedWarning, hasPlayedLevelUp, refreshRound]);
-
-
-  // Removed useEffect that was resetting isFlashing - it was interfering with alerts
-
-
-
-  // Early returns AFTER all hooks (useState, useRef, AND useEffect) are declared
-  if (!activeRound && !loadingSettings) {
-    return (
-      <Layout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
-          <Coffee className="w-16 h-16 text-gray-500 mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-2">Nenhuma rodada ativa</h2>
-          <p className="text-gray-400 mb-6">Inicie uma rodada na página de Rodadas para começar o jogo.</p>
-          <Button onClick={() => navigate('/rounds')}>
-            Ir para Rodadas
-          </Button>
-        </div>
-      </Layout>
-    );
-  }
-
-  // Wait for prizePool to load if this is a final table
-  if (!settings || !activeRound || loadingSettings || (activeRound.is_final_table && !prizePool)) {
-    return (
-      <Layout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
-        </div>
-      </Layout>
-    );
-  }
+  }, [activeRound, isPaused, settings, blindLevels, refreshRound, t, currentLevel, lastTriggeredLevel, getLevelDuration, isAdmin]);
 
   const handleStartGame = async () => {
     if (!activeRound) return;
 
     try {
       setStarting(true);
+
+      unlockAudio();
+      if ('speechSynthesis' in window) {
+        const p = new SpeechSynthesisUtterance(' ');
+        p.volume = 0;
+        window.speechSynthesis.speak(p);
+      }
+
       await apiRequest(`/api/rounds/${activeRound.id}/start`, {
         method: 'POST',
       });
 
-      // Start Game Alerts
-      playLevelUpJingle();
-      setIsFlashing(true);
-      setTimeout(() => setIsFlashing(false), 4000);
+      const initialTime = getLevelDuration(0);
+      await updateTimerState({
+        current_level: 0,
+        time_remaining_seconds: initialTime,
+        timer_started_at: Date.now()
+      });
 
-      const currentLevelText = blindLevels[currentLevel] || '';
-      let blindMsg = "";
-      if (currentLevelText.includes('/')) {
-        const parts = currentLevelText.split('/');
-        blindMsg = `Small blind is ${parts[0]} and big blind is ${parts[1]}`;
-      } else {
-        blindMsg = `Blinds are ${currentLevelText}`;
-      }
-      setTimeout(() => {
-        safeSpeak(`Attention players, the tournament has started. ${blindMsg}`);
-      }, 4000);
-
+      setLastTriggeredLevel(-1); // Use -1 for start game
+      triggerLevelEffects(0, true);
       refreshRound();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao iniciar jogo';
@@ -358,17 +666,17 @@ export default function LiveGame() {
 
     const currentActivePlayers = gamePlayers.filter(p => p.isActive);
 
-    // In knockout rounds, eliminator is REQUIRED unless this is the winner (last player standing)
     if (activeRound?.round_type === 'knockout' && currentActivePlayers.length > 2 && !eliminatorId) {
       alert('Em rodadas Knockout, você deve selecionar quem eliminou este jogador para contabilizar o bounty.');
       return;
     }
 
-    // If only 2 active players and eliminating one, assign position 2 to eliminated and position 1 to remaining
+    let updatedPlayers: GamePlayer[];
+
     if (currentActivePlayers.length === 2) {
       const otherPlayer = currentActivePlayers.find(p => p.id !== playerToEliminate.id);
 
-      setGamePlayers(prev => prev.map(p => {
+      updatedPlayers = gamePlayers.map(p => {
         if (p.id === playerToEliminate.id) {
           return {
             ...p,
@@ -377,10 +685,6 @@ export default function LiveGame() {
             eliminatedAt: Date.now(),
           };
         } else if (otherPlayer && p.id === otherPlayer.id) {
-          // If there's an eliminator (which must be the other player in heads-up), credit them
-          // But in heads-up, the winner is the eliminator.
-          // If I selected an eliminator for the 2nd place, it must be the 1st place.
-          // So we add knockout earnings to the winner (position 1).
           const knockoutBonus = eliminatorId && parseInt(eliminatorId) === p.id ? eliminationKnockout : 0;
 
           return {
@@ -392,16 +696,18 @@ export default function LiveGame() {
           };
         }
         return p;
-      }));
-      setNextPosition(0);
+      });
 
-      // All players eliminated, auto-complete will be triggered by useEffect
+      setGamePlayers(updatedPlayers);
+      setNextPosition(0);
       setShowEliminateDialog(false);
       setPlayerToEliminate(null);
       setIsPaused(true);
+
+      // Save elimination state immediately
+      saveEliminationState(updatedPlayers);
     } else {
-      setGamePlayers(prev => prev.map(p => {
-        // Update eliminated player
+      updatedPlayers = gamePlayers.map(p => {
         if (p.id === playerToEliminate.id) {
           return {
             ...p,
@@ -411,7 +717,6 @@ export default function LiveGame() {
           };
         }
 
-        // Update eliminator if selected
         if (eliminatorId && p.id === parseInt(eliminatorId)) {
           return {
             ...p,
@@ -420,53 +725,115 @@ export default function LiveGame() {
         }
 
         return p;
-      }));
-      setNextPosition(prev => prev - 1);
+      });
 
+      setGamePlayers(updatedPlayers);
+      setNextPosition(prev => prev - 1);
       setShowEliminateDialog(false);
       setPlayerToEliminate(null);
+
+      // Save elimination state immediately
+      saveEliminationState(updatedPlayers);
     }
   };
 
   const handleRebuy = () => {
     if (!playerToEliminate) return;
 
-    setGamePlayers(prev => prev.map(p =>
+    const updatedPlayers = gamePlayers.map(p =>
       p.id === playerToEliminate.id
         ? { ...p, rebuys: p.rebuys + 1 }
         : p
-    ));
+    );
+    setGamePlayers(updatedPlayers);
     setShowEliminateDialog(false);
     setPlayerToEliminate(null);
+
+    // Save state after rebuy
+    saveEliminationState(updatedPlayers);
   };
 
   const handleRestorePlayer = (playerId: number) => {
     const player = gamePlayers.find(p => p.id === playerId);
     if (!player || !player.position) return;
 
-    setGamePlayers(prev => prev.map(p =>
+    const updatedPlayers = gamePlayers.map(p =>
       p.id === playerId
         ? { ...p, position: null, isActive: true, eliminatedAt: null, rebuys: p.rebuys, knockout_earnings: 0 }
         : p
-    ));
+    );
+    setGamePlayers(updatedPlayers);
     setNextPosition(prev => prev + 1);
+
+    // Save state after restore
+    saveEliminationState(updatedPlayers);
+  };
+
+  // Remove player from round (for no-shows)
+  const handleRemovePlayer = async (player: GamePlayer) => {
+    if (!activeRound) return;
+
+    setConfirmModal({
+      isOpen: true,
+      title: t('removePlayer'),
+      message: t('removePlayerConfirm').replace('{name}', player.name),
+      variant: 'danger',
+      onConfirm: async () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        try {
+          await apiRequest(`/api/rounds/${activeRound.id}/remove-player`, {
+            method: 'POST',
+            body: JSON.stringify({ player_id: player.id }),
+          });
+          // Remove from local state
+          setGamePlayers(prev => prev.filter(p => p.id !== player.id));
+          setNextPosition(prev => prev - 1);
+          refreshRound();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Erro ao remover jogador';
+          alert(message);
+        }
+      }
+    });
   };
 
   const handleLevelUp = () => {
     if (currentLevel < blindLevels.length - 1) {
-      setCurrentLevel(prev => prev + 1);
-      setTimeRemaining(settings ? settings.blind_level_duration * 60 : 0);
-      setHasPlayedWarning(false);
-      setHasPlayedLevelUp(false);
+      const nextLevel = currentLevel + 1;
+      const nextTime = getLevelDuration(nextLevel);
+
+      // iOS: Trigger effects FIRST in the click handler to maintain user gesture trust
+      triggerLevelEffects(nextLevel);
+
+      setCurrentLevel(nextLevel);
+      setTimeRemaining(nextTime);
+      setLastTriggeredLevel(currentLevel);
+
+      updateTimerState({
+        current_level: nextLevel,
+        time_remaining_seconds: nextTime,
+        timer_started_at: isPaused ? null : Date.now()
+      });
     }
   };
 
   const handleLevelDown = () => {
     if (currentLevel > 0) {
-      setCurrentLevel(prev => prev - 1);
-      setTimeRemaining(settings ? settings.blind_level_duration * 60 : 0);
-      setHasPlayedWarning(false);
-      setHasPlayedLevelUp(false);
+      const nextLevel = currentLevel - 1;
+      const nextTime = getLevelDuration(nextLevel);
+
+      // iOS: Trigger effects FIRST in the click handler to maintain user gesture trust
+      triggerLevelEffects(nextLevel);
+
+      setCurrentLevel(nextLevel);
+      setTimeRemaining(nextTime);
+      setLastTriggeredLevel(currentLevel);
+
+      updateTimerState({
+        current_level: nextLevel,
+        time_remaining_seconds: nextTime,
+        timer_started_at: isPaused ? null : Date.now()
+      });
     }
   };
 
@@ -475,19 +842,18 @@ export default function LiveGame() {
 
     const activePlayersNow = gamePlayers.filter(p => p.isActive);
 
-    // Skip confirmations if auto-completing
     if (!autoComplete) {
       if (activePlayersNow.length > 1) {
         setConfirmModal({
           isOpen: true,
-          title: 'Jogadores Ativos',
-          message: `Ainda há ${activePlayersNow.length} jogadores ativos. Deseja finalizar mesmo assim?`,
+          title: t('activePlayers'),
+          message: `${t('stillActive')} ${activePlayersNow.length} ${t('finishAnyway')}`,
           variant: 'warning',
           onConfirm: () => {
             setConfirmModal({
               isOpen: true,
-              title: 'Finalizar Rodada',
-              message: 'Tem certeza que deseja finalizar esta rodada? As posições serão salvas e não poderão ser alteradas.',
+              title: t('finishRound'),
+              message: t('confirmFinish'),
               onConfirm: () => {
                 setConfirmModal(prev => ({ ...prev, isOpen: false }));
                 confirmAndCompleteRound([]);
@@ -513,16 +879,13 @@ export default function LiveGame() {
     try {
       setCompleting(true);
 
-      // Calculate prize distribution
       let netPrizePool = 0;
       let buyInValue = 0;
       let totalEntries = 0;
 
       if (activeRound.is_final_table) {
-        // Final Table Logic
         netPrizePool = prizePool?.final_table_pot || 0;
 
-        // Distribution for Final Table (1st to 5th)
         const p1 = settings.final_table_1st_percentage || 40;
         const p2 = settings.final_table_2nd_percentage || 25;
         const p3 = settings.final_table_3rd_percentage || 20;
@@ -553,7 +916,8 @@ export default function LiveGame() {
           setPrizeDistribution({
             total: Math.round(netPrizePool),
             grossTotal: Math.round(netPrizePool),
-            finalTableAmount: 0, // Already deducted
+            finalTableAmount: 0,
+            dealerAmount: 0,
             totalEntries: gamePlayers.length,
             buyInValue: 0,
             isFinalTable: true,
@@ -565,7 +929,6 @@ export default function LiveGame() {
         }
 
       } else {
-        // Regular Round Logic
         buyInValue = activeRound.buy_in_value || settings.default_buy_in || 600;
         const rebuyValue = activeRound.rebuy_value || settings.default_buy_in || 600;
 
@@ -573,7 +936,6 @@ export default function LiveGame() {
         const totalPlayers = gamePlayers.length;
         totalEntries = totalPlayers + totalRebuys;
 
-        // Calculate prize pool breakdown
         const finalTablePercentage = settings.final_table_percentage || 33.33;
         const finalTableFixedValue = settings.final_table_fixed_value || 0;
 
@@ -592,7 +954,6 @@ export default function LiveGame() {
 
         netPrizePool = Math.round(Math.max(0, grossPrizePool - finalTableAmount));
 
-        // Parse prize distribution
         let distributionPercentages: number[] = [];
         if (settings.prize_distribution) {
           if (Array.isArray(settings.prize_distribution)) {
@@ -601,12 +962,11 @@ export default function LiveGame() {
             try {
               distributionPercentages = JSON.parse(settings.prize_distribution);
             } catch {
-              distributionPercentages = [60, 30, 10]; // Default
+              distributionPercentages = [60, 30, 10];
             }
           }
         }
 
-        // Fallback to defaults keys if array is empty (legacy support)
         if (distributionPercentages.length === 0) {
           const p1 = settings.first_place_percentage || 60;
           const p2 = settings.second_place_percentage || 30;
@@ -619,7 +979,6 @@ export default function LiveGame() {
 
         const calculatedPrizes: { id: number; name: string; amount: number; position: number }[] = [];
 
-        // Map percentages to players by position
         distributionPercentages.forEach((percentage, index) => {
           const position = index + 1;
           const player = gamePlayers.find(p => p.position === position);
@@ -638,13 +997,13 @@ export default function LiveGame() {
             total: Math.round(netPrizePool),
             grossTotal: Math.round(grossPrizePool),
             finalTableAmount: Math.round(finalTableAmount),
+            dealerAmount: 0,
             totalEntries: totalEntries,
             buyInValue: buyInValue,
             prizes: calculatedPrizes,
           });
           setShowPrizeModal(true);
         } else {
-          // If not enough players for prizes, just complete
           await confirmAndCompleteRound([]);
         }
       }
@@ -684,26 +1043,23 @@ export default function LiveGame() {
       navigate('/rounds');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Erro ao finalizar rodada';
-      console.error('Error completing round:', err);
       alert(`Falha ao finalizar: ${message}`);
     } finally {
       setCompleting(false);
     }
   };
 
-  // Auto-complete round when all players are inactive (game over)
   useEffect(() => {
     const activeCount = gamePlayers.filter(p => p.isActive).length;
     const totalCount = gamePlayers.length;
 
     if (totalCount > 0 && activeCount === 0 && !completing && !showPrizeModal && activeRound) {
-      // Small delay to ensure state is settled and UI updates
       const timer = setTimeout(() => {
         handleCompleteRound(true);
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [gamePlayers, completing, showPrizeModal, activeRound, handleCompleteRound]);
+  }, [gamePlayers, completing, showPrizeModal, activeRound]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -741,27 +1097,26 @@ export default function LiveGame() {
   const nextLevelInfo = getNextNonBreakLevel();
   const breakInfo = getBreakInfo();
 
-  if (!activeRound) {
+  if (!activeRound && !loadingSettings) {
     return (
       <Layout>
-        <div className="space-y-6">
-          <div>
-            <h2 className="text-3xl font-bold text-white">Jogo ao Vivo</h2>
-            <p className="text-gray-400 mt-1">Nenhuma rodada ativa no momento</p>
-          </div>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] text-center p-8">
+          <Coffee className="w-16 h-16 text-gray-500 mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-2">{t('noActiveRound')}</h2>
+          <p className="text-gray-400 mb-6">{t('noActiveRoundMessage')}</p>
+          <Button onClick={() => navigate('/rounds')}>
+            {t('goToRounds')}
+          </Button>
+        </div>
+      </Layout>
+    );
+  }
 
-          <Card>
-            <CardContent className="py-12">
-              <div className="text-center space-y-4">
-                <p className="text-gray-400">
-                  Crie uma nova rodada na aba "Rodadas" para começar
-                </p>
-                <Button onClick={() => navigate('/rounds')}>
-                  Ir para Rodadas
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+  if (!settings || !activeRound || loadingSettings || (activeRound.is_final_table && !prizePool)) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
         </div>
       </Layout>
     );
@@ -782,92 +1137,116 @@ export default function LiveGame() {
             )}
             <div>
               <h2 className="text-2xl font-bold text-white">
-                {activeRound.is_final_table ? 'Mesa Final' : `Rodada ${activeRound.round_number}`}
+                {activeRound.is_final_table ? t('finalTable') : `${t('round')} ${activeRound.round_number}`}
               </h2>
               <div className="flex items-center space-x-2 text-sm text-gray-400">
-                <span>{activeRound.is_final_table ? 'Disputa pelo Título' : activeRound.round_type.toUpperCase()}</span>
+                <span>{activeRound.is_final_table ? t('titleDispute') : activeRound.round_type.toUpperCase()}</span>
                 <span>•</span>
                 <span>{new Date().toLocaleDateString('pt-BR')}</span>
               </div>
             </div>
           </div>
-          {isAdmin && (
-            <div className="flex items-center space-x-4">
-              {!activeRound.is_started ? (
-                <Button onClick={handleStartGame} loading={starting}>
-                  <Play className="w-5 h-5" />
-                  <span>Iniciar Jogo</span>
-                </Button>
-              ) : (
-                <Button onClick={() => setIsPaused(!isPaused)}>
-                  {isPaused ? (
-                    <>
-                      <Play className="w-5 h-5" />
-                      <span>Continuar</span>
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="w-5 h-5" />
-                      <span>Pausar</span>
-                    </>
-                  )}
-                </Button>
-              )}
+          <div className="flex items-center space-x-4">
+            {/* Table draw button visible to all */}
+            {!activeRound.is_started && (
               <Button
-                variant="primary"
-                onClick={() => handleCompleteRound(false)}
-                loading={completing}
-                disabled={eliminatedPlayers.length === 0}
+                variant="secondary"
+                onClick={() => setShowTableDrawModal(true)}
+                className="bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 border-yellow-500/50"
               >
-                <CheckCircle className="w-4 h-4" />
-                <span>Finalizar Rodada</span>
+                <Shuffle className="w-5 h-5" />
+                <span>{t('drawTables')}</span>
               </Button>
-
-              {/* Finish and Exit button - Only for single tournaments */}
-              {isSingleTournament && (
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    setConfirmModal({
-                      isOpen: true,
-                      title: 'Finalizar Torneio',
-                      message: 'Finalizar jogo único e voltar ao menu principal?',
-                      onConfirm: async () => {
-                        setConfirmModal(prev => ({ ...prev, isOpen: false }));
-                        try {
-                          // Get current championship ID from context
-                          const championshipId = currentChampionship?.id;
-
-                          if (championshipId) {
-                            // Delete the single tournament championship
-                            await apiRequest(`/api/championships/${championshipId}`, {
-                              method: 'DELETE'
-                            });
-                          }
-
-                          // Clear current championship from context and redirect
-                          localStorage.removeItem('current_championship');
-                          navigate('/');
-                          window.location.reload(); // Force reload to clear context
-                        } catch (err) {
-                          console.error('Error finishing game:', err);
-                          alert('Erro ao finalizar jogo. Redirecionando...');
-                          navigate('/');
-                        }
-                      }
+            )}
+            {/* Final table draw button when 10 or fewer players remain */}
+            {activeRound.is_started && activePlayers.length <= 10 && activePlayers.length > 1 && (
+              <Button
+                variant="secondary"
+                onClick={() => setShowFinalTableDrawModal(true)}
+                className="bg-yellow-500/20 text-yellow-300 hover:bg-yellow-500/30 border-yellow-500/50"
+              >
+                <Shuffle className="w-5 h-5" />
+                <span>{t('finalTable')} ({activePlayers.length})</span>
+              </Button>
+            )}
+            {isAdmin && (
+              <>
+                {!activeRound.is_started ? (
+                  <Button onClick={handleStartGame} loading={starting}>
+                    <Play className="w-5 h-5" />
+                    <span>Iniciar Jogo</span>
+                  </Button>
+                ) : (
+                  <Button onClick={() => {
+                    const newPaused = !isPaused;
+                    setIsPaused(newPaused);
+                    updateTimerState({
+                      is_paused: newPaused,
+                      time_remaining_seconds: timeRemaining,
+                      timer_started_at: newPaused ? null : Date.now()
                     });
-                  }}
-                  className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                  }}>
+                    {isPaused ? (
+                      <>
+                        <Play className="w-5 h-5" />
+                        <span>Continuar</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="w-5 h-5" />
+                        <span>Pausar</span>
+                      </>
+                    )}
+                  </Button>
+                )}
+                <Button
+                  variant="primary"
+                  onClick={() => handleCompleteRound(false)}
+                  loading={completing}
+                  disabled={eliminatedPlayers.length === 0}
                 >
-                  <X className="w-5 h-5" />
-                  <span>Finalizar e Sair</span>
+                  <CheckCircle className="w-4 h-4" />
+                  <span>{t('finishRound')}</span>
                 </Button>
-              )}
-            </div>
-          )}
+
+                {isSingleTournament && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setConfirmModal({
+                        isOpen: true,
+                        title: t('finishTournament'),
+                        message: t('finishSingleGameConfirm'),
+                        onConfirm: async () => {
+                          setConfirmModal(prev => ({ ...prev, isOpen: false }));
+                          try {
+                            const championshipId = currentChampionship?.id;
+                            if (championshipId) {
+                              await apiRequest(`/api/championships/${championshipId}`, {
+                                method: 'DELETE'
+                              });
+                            }
+                            localStorage.removeItem('current_championship');
+                            navigate('/');
+                            window.location.reload();
+                          } catch (err) {
+                            console.error('Error finishing game:', err);
+                            navigate('/');
+                          }
+                        }
+                      });
+                    }}
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                  >
+                    <X className="w-5 h-5" />
+                    <span>{t('finishAndExit')}</span>
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Main Blind Display */}
         <Card className={isFlashing
           ? 'animate-flash-gold ring-8 ring-yellow-400 shadow-[0_0_50px_rgba(250,204,21,0.8)]'
           : 'bg-gradient-to-br from-purple-500/20 to-pink-500/20 transition-all duration-300'
@@ -878,18 +1257,16 @@ export default function LiveGame() {
                 Nível {currentLevel + 1}
               </div>
 
-              {/* Timer */}
               <div className={`text-7xl md:text-9xl font-bold font-mono tracking-tight transition-colors ${timeRemaining <= 60 ? 'text-orange-400 animate-pulse' : 'text-white'
                 }`}>
                 {formatTime(timeRemaining)}
               </div>
 
-              {/* Current Blinds */}
               {isBreakLevel(currentLevelText) ? (
                 <div className="flex items-center justify-center space-x-3">
                   <Coffee className="w-12 h-12 text-orange-400" />
                   <div className="text-5xl md:text-7xl font-bold text-orange-400">
-                    INTERVALO
+                    {t('interval')}
                   </div>
                 </div>
               ) : (
@@ -898,39 +1275,36 @@ export default function LiveGame() {
                 </div>
               )}
 
-              {/* Next Level Info */}
               {nextLevelInfo && (
                 <div className="text-gray-300 text-lg">
-                  Próximo: <span className="text-white font-semibold">{nextLevelInfo.level}</span>
+                  {t('next')}: <span className="text-white font-semibold">{nextLevelInfo.level}</span>
                   {breakInfo.hasBreak && (
                     <span className="text-orange-400 ml-2">
-                      (intervalo em {breakInfo.minutesUntilBreak} min)
+                      ({t('breakIn')} {breakInfo.minutesUntilBreak} {t('min')})
                     </span>
                   )}
                 </div>
               )}
 
-              {/* Players Remaining */}
               <div className="flex items-center justify-center space-x-6 text-gray-300 text-lg">
                 <div className="flex items-center space-x-2">
                   <Users className="w-5 h-5 text-green-400" />
                   <span>
-                    {activePlayers.length} de {gamePlayers.length} jogadores
+                    {activePlayers.length} de {gamePlayers.length} {t('playersRemaining')}
                   </span>
                 </div>
               </div>
 
-              {/* Level Controls */}
               {activeRound.is_started && isAdmin && (
                 <div className="space-y-4 pt-4">
                   <div className="flex items-center justify-center space-x-4">
                     <Button variant="secondary" onClick={handleLevelDown} disabled={currentLevel === 0}>
                       <ChevronDown className="w-5 h-5" />
-                      <span>Nível Anterior</span>
+                      <span>{t('previousLevel')}</span>
                     </Button>
                     <Button variant="secondary" onClick={handleLevelUp} disabled={currentLevel === blindLevels.length - 1}>
                       <ChevronUp className="w-5 h-5" />
-                      <span>Próximo Nível</span>
+                      <span>{t('nextLevel')}</span>
                     </Button>
                   </div>
                 </div>
@@ -938,34 +1312,33 @@ export default function LiveGame() {
 
               {timeRemaining <= 60 && timeRemaining > 0 && activeRound.is_started && (
                 <div className="text-orange-400 font-semibold text-lg animate-pulse">
-                  Último minuto!
+                  {t('lastMinute')}
                 </div>
               )}
 
               {!activeRound.is_started && (
                 <div className="text-yellow-400 font-semibold text-lg">
-                  Clique em "Iniciar Jogo" para começar o cronômetro
+                  {t('clickStart')}
                 </div>
               )}
             </div>
           </CardContent>
         </Card>
 
-        {/* Active Players */}
         {activeRound.is_started && (
           <Card>
             <CardHeader>
               <div className="flex items-center space-x-2">
                 <Users className="w-5 h-5 text-green-400" />
                 <h3 className="text-xl font-semibold text-white">
-                  Jogadores Ativos ({activePlayers.length})
+                  {t('activePlayers')} ({activePlayers.length})
                 </h3>
               </div>
             </CardHeader>
             <CardContent>
               {activePlayers.length === 0 ? (
                 <div className="text-center py-8 text-gray-400">
-                  Todos os jogadores foram eliminados
+                  {t('allPlayersEliminated')}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -978,18 +1351,29 @@ export default function LiveGame() {
                         <span className="text-white font-medium">{player.name}</span>
                         {player.rebuys > 0 && (
                           <div className="text-xs text-gray-400">
-                            {player.rebuys} recompra{player.rebuys > 1 ? 's' : ''}
+                            {player.rebuys} {player.rebuys > 1 ? t('rebuys') : t('rebuy')}
                           </div>
                         )}
                       </div>
                       {isAdmin && (
-                        <Button
-                          variant="danger"
-                          onClick={() => handleEliminateClick(player)}
-                          className="!px-3 !py-1"
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
+                        <div className="flex items-center space-x-2">
+                          <Button
+                            variant="danger"
+                            onClick={() => handleEliminateClick(player)}
+                            className="!px-3 !py-1"
+                            title="Eliminar jogador"
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() => handleRemovePlayer(player)}
+                            className="!px-2 !py-1 bg-red-500/10 text-red-400 hover:bg-red-500/20 border-red-500/20"
+                            title="Remover da rodada (não compareceu)"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
                       )}
                     </div>
                   ))}
@@ -999,14 +1383,13 @@ export default function LiveGame() {
           </Card>
         )}
 
-        {/* Eliminated Players - Shown in order (1st place at top) */}
         {eliminatedPlayers.length > 0 && (
           <Card>
             <CardHeader>
               <div className="flex items-center space-x-2">
                 <Trophy className="w-5 h-5 text-yellow-400" />
                 <h3 className="text-xl font-semibold text-white">
-                  Classificação Final ({eliminatedPlayers.length})
+                  {t('finalClassification')} ({eliminatedPlayers.length})
                 </h3>
               </div>
             </CardHeader>
@@ -1029,17 +1412,16 @@ export default function LiveGame() {
                         <span className="text-white font-medium block">{player.name}</span>
                         {player.rebuys > 0 && (
                           <span className="text-gray-400 text-xs">
-                            {player.rebuys} recompra{player.rebuys > 1 ? 's' : ''}
+                            {player.rebuys} {player.rebuys > 1 ? t('rebuys') : t('rebuy')}
                           </span>
                         )}
                         {player.knockout_earnings > 0 && (
                           <span className="text-green-400 text-xs block">
-                            Knockout: $ {player.knockout_earnings.toFixed(0)}
+                            {t('knockoutEarnings')}: $ {player.knockout_earnings.toFixed(0)}
                           </span>
                         )}
                       </div>
                     </div>
-                    {/* Dynamic Prize List - Input shown only if prizes are distributed */}
                     {prizeDistribution && prizeDistribution.prizes.length > 0 && (
                       <Input
                         type="number"
@@ -1065,7 +1447,7 @@ export default function LiveGame() {
                         onClick={() => handleRestorePlayer(player.id)}
                         className="!px-3 !py-1"
                       >
-                        Restaurar
+                        {t('restore')}
                       </Button>
                     )}
                   </div>
@@ -1076,245 +1458,259 @@ export default function LiveGame() {
         )}
       </div>
 
-      {/* Prize Distribution Modal */}
-      {
-        showPrizeModal && prizeDistribution && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
-            <Card className="max-w-2xl w-full my-8">
-              <CardHeader>
-                <div className="relative text-center">
-                  <button
-                    onClick={() => {
-                      setShowPrizeModal(false);
-                      navigate('/rounds');
-                    }}
-                    className="absolute -top-2 -right-2 p-2 text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-full transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                  <h3 className="text-2xl font-bold text-white mb-2">
-                    {prizeDistribution.isFinalTable ? 'Premiação da Mesa Final' : 'Premiação da Rodada'}
-                  </h3>
-                  <p className="text-gray-400">Parabéns aos vencedores!</p>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="space-y-3">
-                  <div className="text-center py-3 bg-white/5 rounded-lg border border-white/10">
-                    <div className="text-gray-400 text-xs mb-1">
-                      {prizeDistribution.isFinalTable ? 'Prêmio Acumulado' : 'Total Arrecadado'}
-                    </div>
-                    <div className="text-2xl font-bold text-white">
-                      $ {Math.round(prizeDistribution.grossTotal)}
-                    </div>
-                    {!prizeDistribution.isFinalTable && (
-                      <div className="text-gray-400 text-xs mt-1">
-                        {prizeDistribution.totalEntries} entradas × $ {Math.round(prizeDistribution.buyInValue)}
-                      </div>
-                    )}
+      {showPrizeModal && prizeDistribution && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
+          <Card className="max-w-2xl w-full my-8">
+            <CardHeader>
+              <div className="relative text-center">
+                <button
+                  onClick={() => {
+                    setShowPrizeModal(false);
+                    navigate('/rounds');
+                  }}
+                  className="absolute -top-2 -right-2 p-2 text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+                <h3 className="text-2xl font-bold text-white mb-2">
+                  {prizeDistribution.isFinalTable ? t('finalTable') : t('roundPrize')}
+                </h3>
+                <p className="text-gray-400">{t('success')}</p>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-3">
+                <div className="text-center py-3 bg-white/5 rounded-lg border border-white/10">
+                  <div className="text-gray-400 text-xs mb-1">
+                    {prizeDistribution.isFinalTable ? t('prizePool') : t('totalCollected')}
                   </div>
-
-                  {/* Show Split for Regular Rounds */}
+                  <div className="text-2xl font-bold text-white">
+                    $ {Math.round(prizeDistribution.grossTotal)}
+                  </div>
                   {!prizeDistribution.isFinalTable && (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-gradient-to-br from-orange-500/20 to-red-500/20 rounded-lg p-3 border border-orange-500/30">
-                        <div className="text-orange-200 text-xs mb-1 uppercase tracking-wider">Mesa Final</div>
-                        <div className="text-xl font-bold text-orange-400">
-                          $ {Math.round(prizeDistribution.finalTableAmount || 0)}
-                        </div>
-                      </div>
-                      <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/20 rounded-lg p-3 border border-emerald-500/30">
-                        <div className="text-emerald-200 text-xs mb-1 uppercase tracking-wider">Premiação Rodada</div>
-                        <div className="text-xl font-bold text-emerald-400">
-                          $ {Math.round(prizeDistribution.total)}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Show Prize Pool for Final Table */}
-                  {prizeDistribution.isFinalTable && (
-                    <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-lg p-4 border border-yellow-500/30 text-center">
-                      <div className="text-yellow-200 text-sm mb-1 uppercase tracking-wider">Prêmio Acumulado</div>
-                      <div className="text-3xl font-bold text-yellow-400">
-                        $ {prizePool?.final_table_pot?.toLocaleString('pt-BR', { minimumFractionDigits: 0 }) || '0'}
-                      </div>
+                    <div className="text-gray-400 text-xs mt-1">
+                      {prizeDistribution.totalEntries} {t('playersSelected')} × $ {Math.round(prizeDistribution.buyInValue)}
                     </div>
                   )}
                 </div>
 
-                <div className="space-y-4">
-                  {prizeDistribution.prizes.map((prize, index) => (
-                    <div key={prize.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-gray-700/20 to-gray-800/20 rounded-lg border border-gray-600/30">
-                      <div className="flex items-center space-x-4">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center ${prize.position === 1 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' :
-                          prize.position === 2 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
-                            prize.position === 3 ? 'bg-gradient-to-br from-orange-500 to-orange-600' :
-                              'bg-gradient-to-br from-blue-500 to-blue-600'
-                          }`}>
-                          <span className="text-white font-bold text-lg">{prize.position}º</span>
-                        </div>
-                        <div>
-                          <div className="text-white font-semibold">{prize.name}</div>
-                          <div className="text-gray-400 text-sm">
-                            {prize.position === 1 ? 'Campeão' :
-                              prize.position === 2 ? 'Vice-Campeão' :
-                                `${prize.position}º Lugar`}
-                          </div>
-                        </div>
+                {!prizeDistribution.isFinalTable && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-gradient-to-br from-orange-500/20 to-red-500/20 rounded-lg p-3 border border-orange-500/30">
+                      <div className="text-orange-200 text-xs mb-1 uppercase tracking-wider">{t('finalTable')}</div>
+                      <div className="text-xl font-bold text-orange-400">
+                        $ {Math.round(prizeDistribution.finalTableAmount || 0)}
                       </div>
-                      <Input
-                        type="number"
-                        step="1"
-                        value={Math.round(prize.amount)}
-                        onChange={(e) => {
-                          const newAmount = Math.round(parseFloat(e.target.value) || 0);
-                          const newPrizes = [...prizeDistribution.prizes];
-                          newPrizes[index] = { ...newPrizes[index], amount: newAmount };
-                          setPrizeDistribution({ ...prizeDistribution, prizes: newPrizes });
-                        }}
-                        className={`w-32 text-right font-bold bg-black/20 ${prize.position === 1 ? 'text-yellow-400 border-yellow-500/30' :
-                          prize.position === 2 ? 'text-gray-300 border-gray-400/30' :
-                            prize.position === 3 ? 'text-orange-400 border-orange-500/30' :
-                              'text-blue-400 border-blue-600/30'
-                          }`}
-                      />
                     </div>
-                  ))}
-                </div>
-
-                {/* Prize Total Validation */}
-                <div className={`p-4 rounded-lg border ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) < 0.01
-                  ? 'bg-green-500/10 border-green-500/30'
-                  : 'bg-red-500/10 border-red-500/30'
-                  }`}>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-300 font-medium">Soma dos Prêmios:</span>
-                    <span className={`font-bold text-xl ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) < 1
-                      ? 'text-green-400'
-                      : 'text-red-400'
-                      }`}>
-                      $ {prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-gray-400 text-sm">Total Disponível:</span>
-                    <span className="text-gray-300 font-semibold">$ {Math.round(prizeDistribution.total)}</span>
-                  </div>
-                </div>
-
-                <div className="pt-4">
-                  <Button
-                    onClick={() => {
-                      const prizes = prizeDistribution.prizes.map(p => ({
-                        playerId: p.id,
-                        amount: p.amount
-                      }));
-                      confirmAndCompleteRound(prizes);
-                    }}
-                    className="w-full"
-                    loading={completing}
-                    disabled={Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) - prizeDistribution.total) >= 1}
-                  >
-                    Confirmar e Finalizar
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-      }
-
-      {/* Eliminate Dialog */}
-      {
-        showEliminateDialog && playerToEliminate && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <Card className="max-w-md w-full">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-semibold text-white">Jogador Eliminado</h3>
-                  <button
-                    onClick={() => setShowEliminateDialog(false)}
-                    className="text-gray-400 hover:text-white"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="text-center py-4">
-                  <div className="text-gray-300 mb-2">Jogador:</div>
-                  <div className="text-2xl font-bold text-white mb-4">{playerToEliminate.name}</div>
-                  {playerToEliminate.rebuys > 0 && (
-                    <div className="text-sm text-gray-400 mb-2">
-                      Recompras até agora: {playerToEliminate.rebuys}
+                    <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/20 rounded-lg p-3 border border-emerald-500/30">
+                      <div className="text-emerald-200 text-xs mb-1 uppercase tracking-wider">{t('roundPrize')}</div>
+                      <div className="text-xl font-bold text-emerald-400">
+                        $ {Math.round(prizeDistribution.total)}
+                      </div>
                     </div>
-                  )}
-                  <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
-                    <span className="text-white font-bold text-3xl">{nextPosition}º</span>
-                  </div>
-                </div>
-
-                {activeRound.round_type === 'knockout' && (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Eliminado por
-                      </label>
-                      <select
-                        value={eliminatorId}
-                        onChange={(e) => setEliminatorId(e.target.value)}
-                        className="w-full bg-slate-900/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                      >
-                        <option value="">Selecione o jogador...</option>
-                        {activePlayers
-                          .filter(p => p.id !== playerToEliminate.id)
-                          .map(p => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))
-                        }
-                      </select>
-                    </div>
-
-                    {eliminatorId && (
-                      <Input
-                        label="Valor do Bounty ($)"
-                        type="number"
-                        step="1"
-                        min="0"
-                        value={eliminationKnockout}
-                        onChange={(e) => setEliminationKnockout(Math.max(0, parseFloat(e.target.value) || 0))}
-                        placeholder="0.00"
-                        disabled={true}
-                      />
-                    )}
                   </div>
                 )}
 
-                <div className="space-y-3 pt-4">
-                  {canRebuy && playerToEliminate.rebuys < maxRebuys && (
-                    <Button onClick={handleRebuy} className="w-full" variant="secondary">
-                      Fazer Recompra e Continuar
-                    </Button>
-                  )}
-                  <Button onClick={handleConfirmEliminate} className="w-full">
-                    Confirmar Eliminação
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setShowEliminateDialog(false)}
-                    className="w-full"
-                  >
-                    Cancelar
-                  </Button>
+                {prizeDistribution.isFinalTable && (
+                  <div className="bg-gradient-to-r from-yellow-500/20 to-orange-500/20 rounded-lg p-4 border border-yellow-500/30 text-center">
+                    <div className="text-yellow-200 text-sm mb-1 uppercase tracking-wider">{t('prizePool')}</div>
+                    <div className="text-3xl font-bold text-yellow-400">
+                      $ {prizePool?.final_table_pot?.toLocaleString('pt-BR', { minimumFractionDigits: 0 }) || '0'}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                {prizeDistribution.prizes.map((prize, index) => (
+                  <div key={prize.id} className="flex items-center justify-between p-4 bg-gradient-to-r from-gray-700/20 to-gray-800/20 rounded-lg border border-gray-600/30">
+                    <div className="flex items-center space-x-4">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center ${prize.position === 1 ? 'bg-gradient-to-br from-yellow-400 to-amber-500' :
+                        prize.position === 2 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
+                          prize.position === 3 ? 'bg-gradient-to-br from-orange-500 to-orange-600' :
+                            'bg-gradient-to-br from-blue-500 to-blue-600'
+                        }`}>
+                        <span className="text-white font-bold text-lg">{prize.position}º</span>
+                      </div>
+                      <div>
+                        <div className="text-white font-semibold">{prize.name}</div>
+                        <div className="text-gray-400 text-sm">
+                          {prize.position === 1 ? t('champion') :
+                            prize.position === 2 ? t('runnerUp') :
+                              `${prize.position}º ${t('place')}`}
+                        </div>
+                      </div>
+                    </div>
+                    <Input
+                      type="number"
+                      step="1"
+                      value={Math.round(prize.amount)}
+                      onChange={(e) => {
+                        const newAmount = Math.round(parseFloat(e.target.value) || 0);
+                        const newPrizes = [...prizeDistribution.prizes];
+                        newPrizes[index] = { ...newPrizes[index], amount: newAmount };
+                        setPrizeDistribution({ ...prizeDistribution, prizes: newPrizes });
+                      }}
+                      className={`w-32 text-right font-bold bg-black/20 ${prize.position === 1 ? 'text-yellow-400 border-yellow-500/30' :
+                        prize.position === 2 ? 'text-gray-300 border-gray-400/30' :
+                          prize.position === 3 ? 'text-orange-400 border-orange-500/30' :
+                            'text-blue-400 border-blue-600/30'
+                        }`}
+                    />
+                  </div>
+                ))}
+
+                {/* Campo Dealer */}
+                <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-700/20 to-pink-700/20 rounded-lg border border-purple-500/30">
+                  <div className="flex items-center space-x-4">
+                    <div className="w-12 h-12 rounded-full flex items-center justify-center bg-gradient-to-br from-purple-500 to-pink-500">
+                      <span className="text-white font-bold text-lg">🎰</span>
+                    </div>
+                    <div>
+                      <div className="text-white font-semibold">{t('dealer')}</div>
+                      <div className="text-gray-400 text-sm">Pagamento aos dealers</div>
+                    </div>
+                  </div>
+                  <Input
+                    type="number"
+                    step="1"
+                    value={Math.round(prizeDistribution.dealerAmount)}
+                    onChange={(e) => {
+                      const newAmount = Math.round(parseFloat(e.target.value) || 0);
+                      setPrizeDistribution({ ...prizeDistribution, dealerAmount: newAmount });
+                    }}
+                    className="w-32 text-right font-bold bg-black/20 text-purple-400 border-purple-500/30"
+                  />
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-      }
+              </div>
+
+              <div className={`p-4 rounded-lg border ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) + prizeDistribution.dealerAmount - prizeDistribution.total) < 1
+                ? 'bg-green-500/10 border-green-500/30'
+                : 'bg-red-500/10 border-red-500/30'
+                }`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-300 font-medium">{t('sumPrizesDealer')}:</span>
+                  <span className={`font-bold text-xl ${Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) + prizeDistribution.dealerAmount - prizeDistribution.total) < 1
+                    ? 'text-green-400'
+                    : 'text-red-400'
+                    }`}>
+                    $ {(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) + prizeDistribution.dealerAmount).toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-gray-400 text-sm">Total Disponível:</span>
+                  <span className="text-gray-300 font-semibold">$ {Math.round(prizeDistribution.total)}</span>
+                </div>
+              </div>
+
+              <div className="pt-4">
+                <Button
+                  onClick={() => {
+                    const prizes = prizeDistribution.prizes.map(p => ({
+                      playerId: p.id,
+                      amount: p.amount
+                    }));
+                    confirmAndCompleteRound(prizes);
+                  }}
+                  className="w-full"
+                  loading={completing}
+                  disabled={Math.abs(prizeDistribution.prizes.reduce((sum, p) => sum + p.amount, 0) + prizeDistribution.dealerAmount - prizeDistribution.total) >= 1}
+                >
+                  {t('confirmAndFinish')}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {showEliminateDialog && playerToEliminate && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="max-w-md w-full">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-semibold text-white">{t('playerEliminated')}</h3>
+                <button
+                  onClick={() => setShowEliminateDialog(false)}
+                  className="text-gray-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="text-center py-4">
+                <div className="text-gray-300 mb-2">{t('player')}:</div>
+                <div className="text-2xl font-bold text-white mb-4">{playerToEliminate.name}</div>
+                {playerToEliminate.rebuys > 0 && (
+                  <div className="text-sm text-gray-400 mb-2">
+                    {t('rebuysSoFar')}: {playerToEliminate.rebuys}
+                  </div>
+                )}
+                <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-purple-500 to-pink-500">
+                  <span className="text-white font-bold text-3xl">{nextPosition}º</span>
+                </div>
+              </div>
+
+              {activeRound.round_type === 'knockout' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      {t('eliminatedBy')}
+                    </label>
+                    <select
+                      value={eliminatorId}
+                      onChange={(e) => setEliminatorId(e.target.value)}
+                      className="w-full bg-slate-900/50 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="">{t('player')}...</option>
+                      {activePlayers
+                        .filter(p => p.id !== playerToEliminate.id)
+                        .map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))
+                      }
+                    </select>
+                  </div>
+
+                  {eliminatorId && (
+                    <Input
+                      label="Valor do Bounty ($)"
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={eliminationKnockout}
+                      onChange={(e) => setEliminationKnockout(Math.max(0, parseFloat(e.target.value) || 0))}
+                      placeholder="0.00"
+                      disabled={true}
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-3 pt-4">
+                {canRebuy && playerToEliminate.rebuys < maxRebuys && (
+                  <Button onClick={handleRebuy} className="w-full" variant="secondary">
+                    {t('makeRebuy')}
+                  </Button>
+                )}
+                <Button onClick={handleConfirmEliminate} className="w-full">
+                  {t('confirmElimination')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowEliminateDialog(false)}
+                  className="w-full"
+                >
+                  {t('cancel')}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
       <ConfirmationModal
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
@@ -1323,6 +1719,37 @@ export default function LiveGame() {
         message={confirmModal.message}
         variant={confirmModal.variant}
       />
+      <TableDrawModal
+        isOpen={showTableDrawModal}
+        onClose={() => setShowTableDrawModal(false)}
+        players={activeRound?.players || []}
+        roundId={activeRound?.id}
+      />
+      <TableDrawModal
+        isOpen={showFinalTableDrawModal}
+        onClose={() => setShowFinalTableDrawModal(false)}
+        players={activePlayers.map(p => ({ id: p.id, name: p.name }))}
+        roundId={activeRound?.id}
+        isFinalTableDraw={true}
+      />
+      {needsAudioActivation && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm p-4">
+          <Card className="max-w-sm w-full border-purple-500 shadow-[0_0_20px_rgba(168,85,247,0.4)]">
+            <CardContent className="py-8 text-center space-y-6">
+              <div className="w-20 h-20 bg-purple-500/20 rounded-full flex items-center justify-center mx-auto">
+                <Coffee className="w-10 h-10 text-purple-400 animate-bounce" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-2xl font-bold text-white">Ativar Áudio</h3>
+                <p className="text-gray-400">Clique no botão abaixo para habilitar o som do cronômetro e as falas do jogo.</p>
+              </div>
+              <Button onClick={() => { unlockAudio(); setNeedsAudioActivation(false); }} className="w-full text-lg py-6 shadow-lg shadow-purple-500/20">
+                Ativar Agora
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </Layout>
   );
 }
