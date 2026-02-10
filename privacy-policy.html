@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,7 +12,7 @@
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             line-height: 1.6;
@@ -20,28 +21,28 @@
             min-height: 100vh;
             padding: 20px;
         }
-        
+
         .container {
             max-width: 800px;
             margin: 0 auto;
             background: white;
             padding: 40px;
             border-radius: 12px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
         }
-        
+
         h1 {
             color: #667eea;
             margin-bottom: 10px;
             font-size: 2.5em;
         }
-        
+
         .app-name {
             color: #764ba2;
             font-size: 1.2em;
             margin-bottom: 20px;
         }
-        
+
         .last-updated {
             color: #666;
             font-size: 0.9em;
@@ -49,140 +50,351 @@
             padding-bottom: 20px;
             border-bottom: 2px solid #f0f0f0;
         }
-        
+
         h2 {
             color: #667eea;
             margin-top: 30px;
             margin-bottom: 15px;
             font-size: 1.5em;
         }
-        
+
         p {
             margin-bottom: 15px;
             text-align: justify;
         }
-        
+
         ul {
             margin-left: 30px;
             margin-bottom: 15px;
         }
-        
+
         li {
             margin-bottom: 8px;
         }
-        
+
         .contact {
             background: #f8f9fa;
             padding: 20px;
             border-radius: 8px;
             margin-top: 30px;
         }
-        
+
         .contact strong {
             color: #667eea;
         }
-        
+
         a {
             color: #667eea;
             text-decoration: none;
         }
-        
+
         a:hover {
             text-decoration: underline;
         }
-        
+
         @media (max-width: 600px) {
             .container {
                 padding: 20px;
             }
-            
+
             h1 {
                 font-size: 2em;
             }
         }
     </style>
 </head>
+
 <body>
     <div class="container">
-        <h1>Política de Privacidade</h1>
-        <div class="app-name">Poker Circuit - Gerenciador de Torneios</div>
-        <div class="last-updated">Última atualização: 9 de fevereiro de 2026</div>
+        <div style="text-align: center; margin-bottom: 20px;">
+            <a href="#pt" style="margin: 0 10px;">Português</a> |
+            <a href="#en" style="margin: 0 10px;">English</a> |
+            <a href="#es" style="margin: 0 10px;">Español</a>
+        </div>
 
-        <h2>1. Introdução</h2>
-        <p>O Poker Circuit ("nós", "nosso" ou "aplicativo") respeita sua privacidade e está comprometido em proteger seus dados pessoais. Esta Política de Privacidade explica como coletamos, usamos e protegemos suas informações quando você usa nosso aplicativo.</p>
+        <div id="pt">
+            <h1>Política de Privacidade</h1>
+            <div class="app-name">Poker Circuit - Gerenciador de Torneios</div>
+            <div class="last-updated">Última atualização: 10 de fevereiro de 2026</div>
 
-        <h2>2. Informações que Coletamos</h2>
-        <p>O Poker Circuit coleta e armazena as seguintes informações:</p>
-        <ul>
-            <li><strong>Informações de Conta:</strong> Nome de usuário, email e senha (criptografada)</li>
-            <li><strong>Dados de Torneios:</strong> Informações sobre campeonatos, jogadores, rodadas e resultados que você cria</li>
-            <li><strong>Dados de Uso:</strong> Informações sobre como você usa o aplicativo para melhorar nossos serviços</li>
-        </ul>
+            <h2>1. Introdução</h2>
+            <p>O Poker Circuit ("nós", "nosso" ou "aplicativo") respeita sua privacidade e está comprometido em proteger
+                seus dados pessoais. Esta Política de Privacidade explica como coletamos, usamos e protegemos suas
+                informações quando você usa nosso aplicativo.</p>
 
-        <h2>3. Como Usamos Suas Informações</h2>
-        <p>Utilizamos suas informações para:</p>
-        <ul>
-            <li>Fornecer e manter o serviço do aplicativo</li>
-            <li>Gerenciar sua conta e autenticação</li>
-            <li>Armazenar e sincronizar seus dados de torneios</li>
-            <li>Melhorar a experiência do usuário</li>
-            <li>Comunicar atualizações importantes sobre o aplicativo</li>
-        </ul>
+            <h2>2. Informações que Coletamos</h2>
+            <p>O Poker Circuit coleta e armazena as seguintes informações:</p>
+            <ul>
+                <li><strong>Informações de Conta:</strong> Nome de usuário, email e senha (criptografada)</li>
+                <li><strong>Dados de Torneios:</strong> Informações sobre campeonatos, jogadores, rodadas e resultados
+                    que você cria</li>
+                <li><strong>Dados de Uso:</strong> Informações sobre como você usa o aplicativo para melhorar nossos
+                    serviços</li>
+            </ul>
 
-        <h2>4. Armazenamento de Dados</h2>
-        <p>Todos os dados são armazenados de forma segura usando Cloudflare D1 (banco de dados SQL distribuído) e Cloudflare Workers. Seus dados são:</p>
-        <ul>
-            <li>Criptografados em trânsito e em repouso</li>
-            <li>Armazenados em servidores seguros</li>
-            <li>Acessíveis apenas por você através de autenticação</li>
-            <li>Não compartilhados com terceiros sem seu consentimento</li>
-        </ul>
+            <h2>3. Como Usamos Suas Informações</h2>
+            <p>Utilizamos suas informações para:</p>
+            <ul>
+                <li>Fornecer e manter o serviço do aplicativo</li>
+                <li>Gerenciar sua conta e autenticação</li>
+                <li>Armazenar e sincronizar seus dados de torneios</li>
+                <li>Melhorar a experiência do usuário</li>
+                <li>Comunicar atualizações importantes sobre o aplicativo</li>
+            </ul>
 
-        <h2>5. Segurança</h2>
-        <p>Implementamos medidas de segurança técnicas e organizacionais apropriadas para proteger seus dados pessoais contra acesso não autorizado, alteração, divulgação ou destruição, incluindo:</p>
-        <ul>
-            <li>Criptografia de senhas usando bcrypt</li>
-            <li>Autenticação JWT (JSON Web Tokens)</li>
-            <li>Conexões HTTPS seguras</li>
-            <li>Proteção contra ataques CSRF</li>
-        </ul>
+            <h2>4. Armazenamento de Dados</h2>
+            <p>Todos os dados são armazenados de forma segura usando Cloudflare D1 (banco de dados SQL distribuído) e
+                Cloudflare Workers. Seus dados são:</p>
+            <ul>
+                <li>Criptografados em trânsito e em repouso</li>
+                <li>Armazenados em servidores seguros</li>
+                <li>Acessíveis apenas por você através de autenticação</li>
+                <li>Não compartilhados com terceiros sem seu consentimento</li>
+            </ul>
 
-        <h2>6. Seus Direitos</h2>
-        <p>Você tem o direito de:</p>
-        <ul>
-            <li>Acessar seus dados pessoais</li>
-            <li>Corrigir dados incorretos</li>
-            <li>Solicitar a exclusão de sua conta e dados</li>
-            <li>Exportar seus dados</li>
-            <li>Retirar seu consentimento a qualquer momento</li>
-        </ul>
+            <h2>5. Segurança</h2>
+            <p>Implementamos medidas de segurança técnicas e organizacionais apropriadas para proteger seus dados
+                pessoais contra acesso não autorizado, alteração, divulgação ou destruição, incluindo:</p>
+            <ul>
+                <li>Criptografia de senhas usando bcrypt</li>
+                <li>Autenticação JWT (JSON Web Tokens)</li>
+                <li>Conexões HTTPS seguras</li>
+                <li>Proteção contra ataques CSRF</li>
+            </ul>
 
-        <h2>7. Compartilhamento de Dados</h2>
-        <p>Não vendemos, alugamos ou compartilhamos seus dados pessoais com terceiros, exceto:</p>
-        <ul>
-            <li>Quando exigido por lei</li>
-            <li>Para proteger nossos direitos legais</li>
-            <li>Com provedores de serviços essenciais (Cloudflare) sob acordos de confidencialidade</li>
-        </ul>
+            <h2>6. Seus Direitos</h2>
+            <p>Você tem o direito de:</p>
+            <ul>
+                <li>Acessar seus dados pessoais</li>
+                <li>Corrigir dados incorretos</li>
+                <li>Solicitar a exclusão de sua conta e dados</li>
+                <li>Exportar seus dados</li>
+                <li>Retirar seu consentimento a qualquer momento</li>
+            </ul>
 
-        <h2>8. Cookies e Tecnologias Similares</h2>
-        <p>O aplicativo usa tokens de autenticação (JWT) armazenados localmente em seu dispositivo para manter você conectado. Estes tokens não rastreiam sua atividade fora do aplicativo.</p>
+            <h2>7. Compartilhamento de Dados</h2>
+            <p>Não vendemos, alugamos ou compartilhamos seus dados pessoais com terceiros, exceto:</p>
+            <ul>
+                <li>Quando exigido por lei</li>
+                <li>Para proteger nossos direitos legais</li>
+                <li>Com provedores de serviços essenciais (Cloudflare) sob acordos de confidencialidade</li>
+            </ul>
 
-        <h2>9. Privacidade de Crianças</h2>
-        <p>O Poker Circuit é destinado a usuários com 18 anos ou mais. Não coletamos intencionalmente informações de menores de 18 anos.</p>
+            <h2>8. Cookies e Tecnologias Similares</h2>
+            <p>O aplicativo usa tokens de autenticação (JWT) armazenados localmente em seu dispositivo para manter você
+                conectado. Estes tokens não rastreiam sua atividade fora do aplicativo.</p>
 
-        <h2>10. Alterações nesta Política</h2>
-        <p>Podemos atualizar esta Política de Privacidade periodicamente. Notificaremos você sobre quaisquer alterações significativas através do aplicativo ou por email.</p>
+            <h2>9. Privacidade de Crianças</h2>
+            <p>O Poker Circuit é destinado a usuários com 18 anos ou mais. Não coletamos intencionalmente informações de
+                menores de 18 anos.</p>
 
-        <h2>11. Retenção de Dados</h2>
-        <p>Mantemos seus dados enquanto sua conta estiver ativa. Se você solicitar a exclusão de sua conta, removeremos todos os seus dados pessoais dentro de 30 dias.</p>
+            <h2>10. Alterações nesta Política</h2>
+            <p>Podemos atualizar esta Política de Privacidade periodicamente. Notificaremos você sobre quaisquer
+                alterações significativas através do aplicativo ou por email.</p>
 
-        <div class="contact">
-            <h2>12. Contato</h2>
-            <p>Se você tiver dúvidas sobre esta Política de Privacidade ou sobre como tratamos seus dados, entre em contato conosco:</p>
-            <p><strong>Email:</strong> <a href="mailto:gnfernando@gmail.com">gnfernando@gmail.com</a></p>
-            <p><strong>Desenvolvedor:</strong> Gnog Media</p>
+            <h2>11. Retenção de Dados</h2>
+            <p>Mantemos seus dados enquanto sua conta estiver ativa. Se você solicitar a exclusão de sua conta,
+                removeremos todos os seus dados pessoais dentro de 30 dias.</p>
+
+            <div class="contact">
+                <h2>12. Contato</h2>
+                <p>Se você tiver dúvidas sobre esta Política de Privacidade ou sobre como tratamos seus dados, entre em
+                    contato conosco:</p>
+                <p><strong>Email:</strong> <a href="mailto:gnfernando@gmail.com">gnfernando@gmail.com</a></p>
+                <p><strong>Desenvolvedor:</strong> Gnog Media</p>
+            </div>
+        </div>
+
+        <hr style="margin: 40px 0; border: 0; border-top: 1px solid #ccc;">
+
+        <div id="en">
+            <h1>Privacy Policy</h1>
+            <div class="app-name">Poker Circuit - Tournament Manager</div>
+            <div class="last-updated">Last updated: February 10, 2026</div>
+
+            <h2>1. Introduction</h2>
+            <p>Poker Circuit ("we", "our" or "app") respects your privacy and is committed to protecting your personal
+                data. This Privacy Policy explains how we collect, use, and protect your information when you use our
+                application.</p>
+
+            <h2>2. Information We Collect</h2>
+            <p>Poker Circuit collects and stores the following information:</p>
+            <ul>
+                <li><strong>Account Information:</strong> Username, email, and password (encrypted)</li>
+                <li><strong>Tournament Data:</strong> Information about championships, players, rounds, and results you
+                    create</li>
+                <li><strong>Usage Data:</strong> Information about how you use the app to improve our services</li>
+            </ul>
+
+            <h2>3. How We Use Your Information</h2>
+            <p>We use your information to:</p>
+            <ul>
+                <li>Provide and maintain the app service</li>
+                <li>Manage your account and authentication</li>
+                <li>Store and synchronize your tournament data</li>
+                <li>Improve user experience</li>
+                <li>Communicate important updates about the app</li>
+            </ul>
+
+            <h2>4. Data Storage</h2>
+            <p>All data is securely stored using Cloudflare D1 (distributed SQL database) and Cloudflare Workers. Your
+                data is:</p>
+            <ul>
+                <li>Encrypted in transit and at rest</li>
+                <li>Stored on secure servers</li>
+                <li>Accessible only by you via authentication</li>
+                <li>Not shared with third parties without your consent</li>
+            </ul>
+
+            <h2>5. Security</h2>
+            <p>We implement appropriate technical and organizational security measures to protect your personal data
+                against unauthorized access, alteration, disclosure, or destruction, including:</p>
+            <ul>
+                <li>Password encryption using bcrypt</li>
+                <li>JWT (JSON Web Tokens) authentication</li>
+                <li>Secure HTTPS connections</li>
+                <li>Protection against CSRF attacks</li>
+            </ul>
+
+            <h2>6. Your Rights</h2>
+            <p>You have the right to:</p>
+            <ul>
+                <li>Access your personal data</li>
+                <li>Correct inaccurate data</li>
+                <li>Request deletion of your account and data</li>
+                <li>Export your data</li>
+                <li>Withdraw your consent at any time</li>
+            </ul>
+
+            <h2>7. Data Sharing</h2>
+            <p>We do not sell, rent, or share your personal data with third parties, except:</p>
+            <ul>
+                <li>When required by law</li>
+                <li>To protect our legal rights</li>
+                <li>With essential service providers (Cloudflare) under confidentiality agreements</li>
+            </ul>
+
+            <h2>8. Cookies and Similar Technologies</h2>
+            <p>The app uses authentication tokens (JWT) stored locally on your device to keep you logged in. These
+                tokens do not track your activity outside the app.</p>
+
+            <h2>9. Children's Privacy</h2>
+            <p>Poker Circuit is intended for users aged 18 and over. We do not knowingly collect information from
+                children under 18.</p>
+
+            <h2>10. Changes to This Policy</h2>
+            <p>We may update this Privacy Policy periodically. We will notify you of any significant changes through the
+                app or by email.</p>
+
+            <h2>11. Data Retention</h2>
+            <p>We retain your data while your account is active. If you request account deletion, we will remove all
+                your personal data within 30 days.</p>
+
+            <div class="contact">
+                <h2>12. Contact</h2>
+                <p>If you have questions about this Privacy Policy or how we handle your data, please contact us:</p>
+                <p><strong>Email:</strong> <a href="mailto:gnfernando@gmail.com">gnfernando@gmail.com</a></p>
+                <p><strong>Developer:</strong> Gnog Media</p>
+            </div>
+        </div>
+
+        <hr style="margin: 40px 0; border: 0; border-top: 1px solid #ccc;">
+
+        <div id="es">
+            <h1>Política de Privacidad</h1>
+            <div class="app-name">Poker Circuit - Gestor de Torneos</div>
+            <div class="last-updated">Última actualización: 10 de febrero de 2026</div>
+
+            <h2>1. Introducción</h2>
+            <p>Poker Circuit ("nosotros", "nuestro" o "aplicación") respeta su privacidad y se compromete a proteger sus
+                datos personales. Esta Política de Privacidad explica cómo recopilamos, usamos y protegemos su
+                información cuando utiliza nuestra aplicación.</p>
+
+            <h2>2. Información que Recopilamos</h2>
+            <p>Poker Circuit recopila y almacena la siguiente información:</p>
+            <ul>
+                <li><strong>Información de Cuenta:</strong> Nombre de usuario, correo electrónico y contraseña
+                    (encriptada)</li>
+                <li><strong>Datos de Torneos:</strong> Información sobre campeonatos, jugadores, rondas y resultados que
+                    usted crea</li>
+                <li><strong>Datos de Uso:</strong> Información sobre cómo utiliza la aplicación para mejorar nuestros
+                    servicios</li>
+            </ul>
+
+            <h2>3. Cómo Usamos Su Información</h2>
+            <p>Utilizamos su información para:</p>
+            <ul>
+                <li>Proporcionar y mantener el servicio de la aplicación</li>
+                <li>Gestionar su cuenta y autenticación</li>
+                <li>Almacenar y sincronizar sus datos de torneos</li>
+                <li>Mejorar la experiencia del usuario</li>
+                <li>Comunicar actualizaciones importantes sobre la aplicación</li>
+            </ul>
+
+            <h2>4. Almacenamiento de Datos</h2>
+            <p>Todos los datos se almacenan de forma segura utilizando Cloudflare D1 (base de datos SQL distribuida) y
+                Cloudflare Workers. Sus datos son:</p>
+            <ul>
+                <li>Encriptados en tránsito y en reposo</li>
+                <li>Almacenados en servidores seguros</li>
+                <li>Accesibles solo por usted a través de autenticación</li>
+                <li>No compartidos con terceros sin su consentimiento</li>
+            </ul>
+
+            <h2>5. Seguridad</h2>
+            <p>Implementamos medidas de seguridad técnicas y organizativas adecuadas para proteger sus datos personales
+                contra el acceso no autorizado, alteración, divulgación o destrucción, incluyendo:</p>
+            <ul>
+                <li>Encriptación de contraseñas usando bcrypt</li>
+                <li>Autenticación JWT (JSON Web Tokens)</li>
+                <li>Conexiones HTTPS seguras</li>
+                <li>Protección contra ataques CSRF</li>
+            </ul>
+
+            <h2>6. Sus Derechos</h2>
+            <p>Usted tiene derecho a:</p>
+            <ul>
+                <li>Acceder a sus datos personales</li>
+                <li>Corregir datos inexactos</li>
+                <li>Solicitar la eliminación de su cuenta y datos</li>
+                <li>Exportar sus datos</li>
+                <li>Retirar su consentimiento en cualquier momento</li>
+            </ul>
+
+            <h2>7. Compartir Datos</h2>
+            <p>No vendemos, alquilamos ni compartimos sus datos personales con terceros, excepto:</p>
+            <ul>
+                <li>Cuando lo exija la ley</li>
+                <li>Para proteger nuestros derechos legales</li>
+                <li>Con proveedores de servicios esenciales (Cloudflare) bajo acuerdos de confidencialidad</li>
+            </ul>
+
+            <h2>8. Cookies y Tecnologías Similares</h2>
+            <p>La aplicación utiliza tokens de autenticación (JWT) almacenados localmente en su dispositivo para
+                mantener su sesión iniciada. Estos tokens no rastrean su actividad fuera de la aplicación.</p>
+
+            <h2>9. Privacidad de los Niños</h2>
+            <p>Poker Circuit está dirigido a usuarios mayores de 18 años. No recopilamos intencionadamente información
+                de menores de 18 años.</p>
+
+            <h2>10. Cambios en esta Política</h2>
+            <p>Podemos actualizar esta Política de Privacidad periódicamente. Le notificaremos sobre cualquier cambio
+                significativo a través de la aplicación o por correo electrónico.</p>
+
+            <h2>11. Retención de Datos</h2>
+            <p>Mantenemos sus datos mientras su cuenta esté activa. Si solicita la eliminación de su cuenta,
+                eliminaremos todos sus datos personales dentro de los 30 días.</p>
+
+            <div class="contact">
+                <h2>12. Contacto</h2>
+                <p>Si tiene preguntas sobre esta Política de Privacidad o sobre cómo manejamos sus datos, contáctenos:
+                </p>
+                <p><strong>Correo electrónico:</strong> <a href="mailto:gnfernando@gmail.com">gnfernando@gmail.com</a>
+                </p>
+                <p><strong>Desarrollador:</strong> Gnog Media</p>
+            </div>
         </div>
     </div>
 </body>
+
 </html>
